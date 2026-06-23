@@ -71,12 +71,12 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 
 ## 🔜 Phase 4 — Smart Scanning
 
-- [ ] Receipt scanner — upload grocery receipt, parse line items into pantry
+- [x] Receipt scanner — upload grocery receipt, parse line items into pantry
 - [ ] Barcode scanner — scan product barcode, auto-identify ingredient
 - [ ] Expiry date tracking — add best-by dates to pantry items
 - [ ] Low stock alerts — flag items below a set quantity threshold
 - [ ] Grocery list generator — compile missing ingredients across saved recipes
-
+- [x] store abbreviation directory wiht learnin infrastructure
 ---
 
 ## 🔜 Phase 5 — Recipe Intelligence
@@ -91,7 +91,21 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 
 ---
 
-## 🔜 Phase 6 — Mobile App (React Native)
+## 🔜 Phase 6 — Households
+
+- [ ] Create a household (name, invite members)
+- [ ] Household shared pantry (all members read/write)
+- [ ] Private pantry per member alongside shared pantry
+- [ ] 🔒 Private | 🏠 Household toggle on pantry items
+- [ ] Real-time sync — ingredient changes reflect for all members instantly
+- [ ] Shared recipe collection within household
+- [ ] Private recipes per member
+- [ ] Household member management (invite, remove)
+- [ ] Activity feed — "User B used the last 2 eggs"
+
+---
+
+## 🔜 Phase 7 — Mobile App (React Native)
 
 - [ ] Scaffold React Native app with Expo
 - [ ] Port all three screens — Scan, My Pantry, Discover
