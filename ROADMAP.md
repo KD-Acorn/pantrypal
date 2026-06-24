@@ -58,11 +58,11 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 
 ## 🔜 Phase 2 — Backend & Accounts
 
-- [ ] Firebase Authentication (email/password + Google sign-in)
-- [ ] Firestore database — replace localStorage with cloud sync
-- [ ] Pantry syncs across devices when logged in
-- [ ] User profiles and preferences
-- [ ] Recipe save/favorites collection per user
+- [x] Firebase Authentication (email/password + Google sign-in)
+- [x] Firestore database — replace localStorage with cloud sync
+- [x] Pantry syncs across devices when logged in
+- [x] User profiles and preferences
+- [x] Recipe save/favorites collection per user
 - [ ] Star ratings saved to Firestore (persistent across devices)
 - [ ] Nutritional facts — integrate Edamam or Spoonacular API
 - [ ] Nutritional facts scale with portion size
