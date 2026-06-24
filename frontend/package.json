@@ -8,6 +8,7 @@
     "preview": "vite preview --port 3004"
   },
   "dependencies": {
+    "firebase": "^12.15.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
