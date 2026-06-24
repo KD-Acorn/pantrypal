@@ -12,6 +12,7 @@ export default function ScanPage({ pantry, toast }) {
   const [preview, setPreview] = useState(null);
   const [storeBanner, setStoreBanner] = useState(null);
   const [dupeActions, setDupeActions] = useState({});
+  const [scanError, setScanError] = useState(null);
 
   function handleTextAdd() {
     const names = textInput.split(',').map(s => s.trim()).filter(Boolean);
@@ -35,6 +36,7 @@ export default function ScanPage({ pantry, toast }) {
     setScanning(true);
     setScanMsg('Analyzing your photo...');
     setStoreBanner(null);
+    setScanError(null);
     try {
       const base64 = await fileToBase64(file);
       const resp = await fetch(`${API}/api/scan`, {
@@ -46,7 +48,7 @@ export default function ScanPage({ pantry, toast }) {
       const data = await resp.json();
       const items = (data.ingredients || []).filter(Boolean);
       if (items.length === 0) {
-        toast.show('No ingredients detected — try a clearer photo', 'error');
+        setScanError('photo');
         return;
       }
       setPreview(items.map(name => ({ name, quantity: 1, unit: 'item', checked: true })));
@@ -64,6 +66,7 @@ export default function ScanPage({ pantry, toast }) {
     setScanning(true);
     setScanMsg('Reading receipt...');
     setStoreBanner(null);
+    setScanError(null);
     try {
       const base64 = await fileToBase64(file);
       const resp = await fetch(`${API}/api/scan-receipt`, {
@@ -75,7 +78,7 @@ export default function ScanPage({ pantry, toast }) {
       const data = await resp.json();
       const items = data.ingredients || [];
       if (items.length === 0) {
-        toast.show('No food items found on receipt — try a flatter, clearer photo', 'error');
+        setScanError('receipt');
         return;
       }
       setPreview(items.map(i => ({
@@ -122,7 +125,7 @@ export default function ScanPage({ pantry, toast }) {
   const checkedCount = preview ? preview.filter(p => p.checked).length : 0;
 
   const tabBtn = (key, label) => (
-    <button onClick={() => { setMode(key); setPreview(null); setStoreBanner(null); }} style={{
+    <button onClick={() => { setMode(key); setPreview(null); setStoreBanner(null); setScanError(null); }} style={{
       flex: 1, padding: '10px 0', fontSize: 13, fontWeight: mode === key ? 600 : 400,
       color: mode === key ? '#10b981' : '#6b7280', background: 'none', border: 'none',
       borderBottom: `2px solid ${mode === key ? '#10b981' : 'transparent'}`,
@@ -262,25 +265,53 @@ export default function ScanPage({ pantry, toast }) {
       {/* ref.click() is blocked by mobile Safari and Chrome as a security measure */}
       {mode === 'scan' && !preview && (
         <div>
-          <label htmlFor="photo-upload" style={{
-            display: 'block',
-            border: '2px dashed #d1d5db', borderRadius: 16, padding: '40px 20px',
-            textAlign: 'center', cursor: 'pointer', background: '#fafafa',
+          <div style={{
+            border: '2px dashed #d1d5db', borderRadius: 16, padding: '32px 20px',
+            textAlign: 'center', background: '#fafafa',
           }}>
             {scanning ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
                 <Spinner size={32} />
                 <div style={{ fontSize: 14, color: '#6b7280' }}>{scanMsg}</div>
               </div>
+            ) : scanError === 'photo' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                <div style={{ fontSize: 14, color: '#b45309', lineHeight: 1.5 }}>
+                  ⚠️ No food items found in this photo.<br />
+                  Try a clearer shot with better lighting, or upload a different photo.
+                </div>
+                <button onClick={() => setScanError(null)} style={{
+                  height: 40, padding: '0 24px', borderRadius: 10, border: 'none',
+                  background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>Try Again</button>
+              </div>
             ) : (
               <>
                 <div style={{ fontSize: 40, marginBottom: 8 }}>📸</div>
-                <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 4 }}>Tap to take a photo or upload</div>
-                <div style={{ fontSize: 12, color: '#9ca3af' }}>Point at your fridge, pantry, or groceries</div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>Scan your ingredients</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+                  <label htmlFor="camera-capture" style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
+                    background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}>📷 Take a Photo</label>
+                  <label htmlFor="camera-upload" style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    height: 40, padding: '0 20px', borderRadius: 10,
+                    border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
+                    fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
+                  }}>🖼️ Upload from Gallery</label>
+                </div>
+                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Point at your fridge, pantry, or groceries</div>
               </>
             )}
-          </label>
-          <input id="photo-upload" type="file" accept="image/*" capture="environment"
+          </div>
+          <input id="camera-capture" type="file" accept="image/*" capture="environment"
+            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
+            onChange={e => handleImageUpload(e.target.files?.[0])} />
+          <input id="camera-upload" type="file" accept="image/*"
             style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
             onChange={e => handleImageUpload(e.target.files?.[0])} />
         </div>
@@ -300,32 +331,44 @@ export default function ScanPage({ pantry, toast }) {
                 <Spinner size={32} />
                 <div style={{ fontSize: 14, color: '#6b7280' }}>{scanMsg}</div>
               </div>
+            ) : scanError === 'receipt' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                <div style={{ fontSize: 14, color: '#b45309', lineHeight: 1.5 }}>
+                  ⚠️ No food items found on this receipt.<br />
+                  Try a flatter photo with better lighting, or upload a different receipt.
+                </div>
+                <button onClick={() => setScanError(null)} style={{
+                  height: 40, padding: '0 24px', borderRadius: 10, border: 'none',
+                  background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>Try Again</button>
+              </div>
             ) : (
               <>
                 <div style={{ fontSize: 40, marginBottom: 8 }}>🧾</div>
                 <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>Scan a grocery receipt</div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  <label htmlFor="receipt-upload" style={{
+                  <label htmlFor="receipt-capture" style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
                     background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
                     cursor: 'pointer', fontFamily: 'inherit',
-                  }}>Upload Receipt Photo</label>
-                  <label htmlFor="receipt-capture" style={{
+                  }}>📷 Scan Receipt</label>
+                  <label htmlFor="receipt-upload" style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10,
                     border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
                     fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
-                  }}>Scan Receipt</label>
+                  }}>🖼️ Upload Receipt Photo</label>
                 </div>
                 <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Works best with flattened receipts in good lighting</div>
               </>
             )}
           </div>
-          <input id="receipt-upload" type="file" accept="image/*"
+          <input id="receipt-capture" type="file" accept="image/*" capture="environment"
             style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
             onChange={e => handleReceiptUpload(e.target.files?.[0])} />
-          <input id="receipt-capture" type="file" accept="image/*" capture="environment"
+          <input id="receipt-upload" type="file" accept="image/*"
             style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
             onChange={e => handleReceiptUpload(e.target.files?.[0])} />
         </div>
