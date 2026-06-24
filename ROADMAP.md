@@ -5,7 +5,7 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 
 ## 🐛 Known Bugs
 
-- [ ] Photo upload on Scan page — clicking "Upload Photo" does nothing on some devices/browsers
+- [x ] Photo upload on Scan page — clicking "Upload Photo" does nothing on some devices/browsers
       (camera capture works, text mode works, receipt mode affected too)
 
 ## 💬 Feedback & Reporting
