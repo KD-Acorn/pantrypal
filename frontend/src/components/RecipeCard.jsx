@@ -42,6 +42,7 @@ export default function RecipeCard({
   isSaved = false,
   onSave,
   onUnsave,
+  onMadeIt,
   mode = 'discover',
 }) {
   const [showFull, setShowFull] = useState(false);
@@ -137,6 +138,14 @@ export default function RecipeCard({
               }}>★</button>
             ))}
           </div>
+
+          {onMadeIt && (
+            <button onClick={(e) => { e.stopPropagation(); onMadeIt(recipe, servings); }} style={{
+              width: '100%', height: 38, borderRadius: 8, border: 'none',
+              background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit', marginBottom: 8,
+            }}>✅ Made It</button>
+          )}
 
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={(e) => { e.stopPropagation(); setShowFull(v => !v); }} style={{
@@ -253,6 +262,13 @@ export default function RecipeCard({
             <div style={{ marginTop: 16, fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>
               Structured ingredients not available for this recipe. Try shuffling for new results.
             </div>
+          )}
+          {onMadeIt && recipe.ingredients?.length > 0 && (
+            <button onClick={(e) => { e.stopPropagation(); onMadeIt(recipe, servings); }} style={{
+              width: '100%', height: 42, borderRadius: 10, border: 'none',
+              background: '#10b981', color: '#fff', fontSize: 14, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit', marginTop: 20,
+            }}>✅ Made It</button>
           )}
         </div>
       </div>

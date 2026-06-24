@@ -1,14 +1,17 @@
 import { useState } from 'react';
 import Spinner from '../components/Spinner';
 import RecipeCard from '../components/RecipeCard';
+import MadeItSheet from '../components/MadeItSheet';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const CUISINES = ['Any', 'Italian', 'Asian', 'Mexican', 'Quick & Easy', 'Mediterranean'];
 
-export default function DiscoverPage({ pantry, toast, saved }) {
+export default function DiscoverPage({ pantry, toast, saved, cookHistory }) {
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [cuisineIdx, setCuisineIdx] = useState(0);
+  const [madeItRecipe, setMadeItRecipe] = useState(null);
+  const [madeItPortions, setMadeItPortions] = useState(2);
 
   async function fetchRecipes(idx) {
     if (pantry.items.length === 0) {
@@ -91,10 +94,21 @@ export default function DiscoverPage({ pantry, toast, saved }) {
               const match = saved.items.find(s => s.title === recipe.title);
               if (match) { saved.unsave(match.id); toast.show('Recipe removed', 'info'); }
             }}
+            onMadeIt={(recipe, portions) => { setMadeItRecipe(recipe); setMadeItPortions(portions); }}
             mode="discover"
           />
         ))}
       </div>
+      {madeItRecipe && (
+        <MadeItSheet
+          recipe={madeItRecipe}
+          portionSize={madeItPortions}
+          pantry={pantry}
+          onClose={() => setMadeItRecipe(null)}
+          toast={toast}
+          cookHistory={cookHistory}
+        />
+      )}
     </div>
   );
 }

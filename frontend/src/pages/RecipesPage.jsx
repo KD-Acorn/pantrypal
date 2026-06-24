@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import RecipeCard from '../components/RecipeCard';
+import MadeItSheet from '../components/MadeItSheet';
 
 const SORT_OPTIONS = [
   { key: 'date', label: 'Date Saved' },
@@ -26,12 +27,22 @@ function parseMins(cookTime) {
   return n;
 }
 
-export default function RecipesPage({ saved, pantry, toast, onSwitchTab }) {
+function formatDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory }) {
   const [expandedId, setExpandedId] = useState(null);
   const [sort, setSort] = useState('date');
   const [cuisineFilter, setCuisineFilter] = useState('All');
   const [diffFilter, setDiffFilter] = useState('All');
   const [timeFilter, setTimeFilter] = useState('any');
+  const [madeItRecipe, setMadeItRecipe] = useState(null);
+  const [madeItPortions, setMadeItPortions] = useState(2);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [subsExpanded, setSubsExpanded] = useState(false);
+  const [expandedHistoryId, setExpandedHistoryId] = useState(null);
 
   const hasActiveFilter = cuisineFilter !== 'All' || diffFilter !== 'All' || timeFilter !== 'any';
 
@@ -135,11 +146,118 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab }) {
                 onToggleCollapse={() => setExpandedId(prev => prev === r.id ? null : r.id)}
                 isSaved={true}
                 onUnsave={(recipe) => { saved.unsave(r.id); toast.show('Recipe removed', 'info'); }}
+                onMadeIt={(recipe, portions) => { setMadeItRecipe(recipe); setMadeItPortions(portions); }}
                 mode="saved"
               />
             ))}
           </div>
         </>
+      )}
+      {/* Cook History */}
+      {cookHistory && cookHistory.history.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <button onClick={() => setHistoryExpanded(v => !v)} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+            padding: '12px 0', background: 'none', border: 'none', borderTop: '1px solid #f0f0f0',
+            cursor: 'pointer', fontFamily: 'inherit',
+          }}>
+            <span style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>Cook History</span>
+            <span style={{
+              fontSize: 11, fontWeight: 600, background: '#f3f4f6', color: '#374151',
+              padding: '2px 8px', borderRadius: 20,
+            }}>{cookHistory.history.length}</span>
+            <span style={{ marginLeft: 'auto', fontSize: 14, color: '#9ca3af' }}>
+              {historyExpanded ? '▴' : '▾'}
+            </span>
+          </button>
+          {historyExpanded && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 8 }}>
+              {cookHistory.getHistory().map(entry => (
+                <div key={entry.id} style={{
+                  background: '#fff', border: '1px solid #f0f0f0', borderRadius: 12, padding: 12,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>{entry.recipeTitle}</span>
+                    <span style={{ fontSize: 11, color: '#9ca3af' }}>{formatDate(entry.cookedAt)}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, fontSize: 12, color: '#6b7280' }}>
+                    <span>{entry.portionSize} serving{entry.portionSize !== 1 ? 's' : ''}</span>
+                    {entry.cuisine && <span>· {entry.cuisine}</span>}
+                  </div>
+                  {entry.substitutions?.length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <button onClick={() => setExpandedHistoryId(prev => prev === entry.id ? null : entry.id)} style={{
+                        fontSize: 12, color: '#f59e0b', background: 'none', border: 'none',
+                        cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+                      }}>
+                        Made with {entry.substitutions.length} substitution{entry.substitutions.length > 1 ? 's' : ''}{' '}
+                        {expandedHistoryId === entry.id ? '▴' : '▾'}
+                      </button>
+                      {expandedHistoryId === entry.id && (
+                        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          {entry.substitutions.map((s, i) => (
+                            <div key={i} style={{ fontSize: 11, color: '#6b7280', paddingLeft: 8 }}>
+                              Used {s.substituted.amount} {s.substituted.unit} {s.substituted.name}{' '}
+                              instead of {s.original.name}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* My Substitutions */}
+      {cookHistory && cookHistory.substitutions.length > 0 && (
+        <div style={{ marginTop: historyExpanded || !cookHistory.history.length ? 24 : 0 }}>
+          <button onClick={() => setSubsExpanded(v => !v)} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+            padding: '12px 0', background: 'none', border: 'none', borderTop: '1px solid #f0f0f0',
+            cursor: 'pointer', fontFamily: 'inherit',
+          }}>
+            <span style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>My Substitutions</span>
+            <span style={{
+              fontSize: 11, fontWeight: 600, background: '#f3f4f6', color: '#374151',
+              padding: '2px 8px', borderRadius: 20,
+            }}>{cookHistory.substitutions.length}</span>
+            <span style={{ marginLeft: 'auto', fontSize: 14, color: '#9ca3af' }}>
+              {subsExpanded ? '▴' : '▾'}
+            </span>
+          </button>
+          {subsExpanded && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingBottom: 8 }}>
+              {cookHistory.getSubstitutions().map(sub => (
+                <div key={sub.id} style={{
+                  background: '#fff', border: '1px solid #f0f0f0', borderRadius: 10, padding: '10px 12px',
+                }}>
+                  <div style={{ fontSize: 13, color: '#374151' }}>
+                    Used <strong>{sub.substituted.amount} {sub.substituted.unit} {sub.substituted.name}</strong>{' '}
+                    instead of <strong>{sub.original.name}</strong>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                    in {sub.recipeTitle} · {formatDate(sub.loggedAt)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {madeItRecipe && (
+        <MadeItSheet
+          recipe={madeItRecipe}
+          portionSize={madeItPortions}
+          pantry={pantry}
+          onClose={() => setMadeItRecipe(null)}
+          toast={toast}
+          cookHistory={cookHistory}
+        />
       )}
     </div>
   );
