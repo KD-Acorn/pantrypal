@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import Spinner from '../components/Spinner';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
@@ -12,8 +12,6 @@ export default function ScanPage({ pantry, toast }) {
   const [preview, setPreview] = useState(null);
   const [storeBanner, setStoreBanner] = useState(null);
   const [dupeActions, setDupeActions] = useState({});
-  const fileRef = useRef(null);
-  const receiptRef = useRef(null);
 
   function handleTextAdd() {
     const names = textInput.split(',').map(s => s.trim()).filter(Boolean);
@@ -260,9 +258,12 @@ export default function ScanPage({ pantry, toast }) {
       )}
 
       {/* Photo scan mode */}
+      {/* Mobile fix: use <label> trigger instead of ref.click() */}
+      {/* ref.click() is blocked by mobile Safari and Chrome as a security measure */}
       {mode === 'scan' && !preview && (
         <div>
-          <div onClick={() => fileRef.current?.click()} style={{
+          <label htmlFor="photo-upload" style={{
+            display: 'block',
             border: '2px dashed #d1d5db', borderRadius: 16, padding: '40px 20px',
             textAlign: 'center', cursor: 'pointer', background: '#fafafa',
           }}>
@@ -278,13 +279,16 @@ export default function ScanPage({ pantry, toast }) {
                 <div style={{ fontSize: 12, color: '#9ca3af' }}>Point at your fridge, pantry, or groceries</div>
               </>
             )}
-          </div>
-          <input ref={fileRef} type="file" accept="image/*" capture="environment"
-            style={{ display: 'none' }} onChange={e => handleImageUpload(e.target.files?.[0])} />
+          </label>
+          <input id="photo-upload" type="file" accept="image/*" capture="environment"
+            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
+            onChange={e => handleImageUpload(e.target.files?.[0])} />
         </div>
       )}
 
       {/* Receipt mode */}
+      {/* Mobile fix: use <label> trigger instead of ref.click() */}
+      {/* ref.click() is blocked by mobile Safari and Chrome as a security measure */}
       {mode === 'receipt' && !preview && (
         <div>
           <div style={{
@@ -301,28 +305,29 @@ export default function ScanPage({ pantry, toast }) {
                 <div style={{ fontSize: 40, marginBottom: 8 }}>🧾</div>
                 <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>Scan a grocery receipt</div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  <button onClick={() => receiptRef.current?.click()} style={{
+                  <label htmlFor="receipt-upload" style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
                     background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
                     cursor: 'pointer', fontFamily: 'inherit',
-                  }}>Upload Receipt Photo</button>
-                  <button onClick={() => {
-                    const input = document.createElement('input');
-                    input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
-                    input.onchange = (e) => handleReceiptUpload(e.target.files?.[0]);
-                    input.click();
-                  }} style={{
+                  }}>Upload Receipt Photo</label>
+                  <label htmlFor="receipt-capture" style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10,
                     border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
                     fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
-                  }}>Scan Receipt</button>
+                  }}>Scan Receipt</label>
                 </div>
                 <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Works best with flattened receipts in good lighting</div>
               </>
             )}
           </div>
-          <input ref={receiptRef} type="file" accept="image/*"
-            style={{ display: 'none' }} onChange={e => handleReceiptUpload(e.target.files?.[0])} />
+          <input id="receipt-upload" type="file" accept="image/*"
+            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
+            onChange={e => handleReceiptUpload(e.target.files?.[0])} />
+          <input id="receipt-capture" type="file" accept="image/*" capture="environment"
+            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
+            onChange={e => handleReceiptUpload(e.target.files?.[0])} />
         </div>
       )}
 
