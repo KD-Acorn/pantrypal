@@ -86,22 +86,52 @@ app.post('/api/recipes', async (req, res) => {
         max_tokens: 3000,
         messages: [{
           role: 'user',
-          content: `I have these ingredients: ${ingredients.join(', ')}. Suggest 3 recipes I can make. ${cuisineClause}
-For each recipe return a JSON object with exactly these fields:
-- title: string
-- description: string (1-2 sentences)
-- cookTime: string (e.g. "25 min")
-- difficulty: "Easy" | "Medium" | "Hard"
-- matchScore: number (percentage of my ingredients the recipe uses, 0-100)
-- missingIngredients: string[] (items I'd need to buy)
-- cuisine: string
-- baseServings: number (what serving size the amounts are written for, typically 2 or 4)
-- ingredients: array of { amount: number, unit: string, name: string }
-  Use standard units: cup, tbsp, tsp, oz, g, ml, whole, pinch, clove, slice, lb, can
-  Use numeric amounts only (e.g. 0.5 not "1/2")
-- steps: string[] (cooking instructions, one step per string)
+          content: `You are an experienced chef and culinary expert. A home cook has these ingredients available:
+${ingredients.join(', ')}
 
-Return ONLY a valid JSON array of 3 recipe objects. No markdown, no preamble, no commentary.`,
+${cuisineClause}
+
+Suggest 3 genuinely appealing, real recipes that a person would actually want to cook and eat.
+Follow these rules strictly:
+
+RECIPE QUALITY RULES:
+- Suggest real, named dishes that people recognize (e.g. "Classic Carbonara", "Peanut Butter Banana Smoothie Bowl", "Spicy Tuna Fried Rice") — not generic combinations like "Egg and Potato Mix"
+- Think like a chef: if the user has most ingredients for a beloved classic dish, suggest it even if a few items are missing
+- Prioritize flavor cohesion — do not mix sweet dessert ingredients into savory mains
+- Consider cooking techniques that elevate simple ingredients (caramelizing, toasting, emulsifying)
+- Each recipe must be something a real restaurant or home cook would proudly serve
+- Vary the 3 suggestions: aim for different meal types (e.g. one light, one hearty, one creative)
+- If ingredients are limited or unusual, be creative but stay realistic and appetizing
+- Never suggest a recipe just because the ingredients technically combine — only suggest it if it tastes good
+
+MISSING INGREDIENTS:
+- It is completely fine to suggest a recipe where the user is missing several ingredients
+- Missing ingredients should be common pantry staples easy to buy (not exotic specialty items)
+- A 40% match score on a beloved classic is better than a 90% match on a bland combination
+
+FORMATTING RULES:
+- Return ONLY a valid JSON array of exactly 3 recipe objects
+- No markdown, no backticks, no preamble, no explanation outside the JSON
+- Each object must have exactly these fields:
+  {
+    "title": "Classic dish name",
+    "description": "1-2 sentences describing why this dish is delicious and appealing",
+    "cookTime": "25 min",
+    "difficulty": "Easy" | "Medium" | "Hard",
+    "matchScore": number 0-100,
+    "missingIngredients": ["item1", "item2"],
+    "cuisine": "Italian",
+    "baseServings": 2,
+    "ingredients": [
+      { "amount": 2, "unit": "cup", "name": "all-purpose flour" }
+    ],
+    "steps": [
+      "Step 1 instruction here",
+      "Step 2 instruction here"
+    ]
+  }
+- Use numeric amounts only (0.5 not "1/2")
+- Standard units: cup, tbsp, tsp, oz, g, ml, whole, pinch, clove, slice, lb, can, bag, bunch`,
         }],
       }),
     });
