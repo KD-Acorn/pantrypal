@@ -1,6 +1,18 @@
 # PantryPal — Roadmap
 
 This document tracks every planned, in-progress, and completed feature for PantryPal across all phases.
+---
+
+## 🐛 Known Bugs
+
+- [ ] Photo upload on Scan page — clicking "Upload Photo" does nothing on some devices/browsers
+      (camera capture works, text mode works, receipt mode affected too)
+
+## 💬 Feedback & Reporting
+
+- [ ] "Report a Bug / Give Feedback" button on home screen or in nav
+      Captures: description, scan mode active, browser/device info
+      Stores to localStorage log, future: sends to Firebase or email
 
 ---
 
