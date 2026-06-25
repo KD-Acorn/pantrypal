@@ -37,14 +37,18 @@ export default function RecipeCard({
   pantryItems = [],
   ratings = {},
   onRate,
+  ratingKey,
   collapsed = false,
   onToggleCollapse,
   isSaved = false,
   onSave,
   onUnsave,
   onMadeIt,
+  onCustomize,
+  onShareToggle,
   mode = 'discover',
 }) {
+  const isCommunity = mode === 'community';
   const [showFull, setShowFull] = useState(false);
   const [servings, setServings] = useState(recipe.baseServings || 2);
   const [nutritionTip, setNutritionTip] = useState(false);
@@ -110,12 +114,31 @@ export default function RecipeCard({
           overflow: 'hidden',
           transition: 'max-height 0.3s ease',
         }}>
+          {isCommunity && recipe.authorName && (
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+              By {recipe.authorName}
+            </div>
+          )}
+
           <p style={{ fontSize: 13, color: '#6b7280', lineHeight: 1.5, marginBottom: 10, marginTop: 8 }}>{recipe.description}</p>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            {isCommunity && (
+              <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#ecfdf5', color: '#065f46' }}>Community Recipe</span>
+            )}
             {recipe.cuisine && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#374151' }}>{recipe.cuisine}</span>}
             {recipe.cookTime && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>⏱ {recipe.cookTime}</span>}
             {recipe.difficulty && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: diffColor(recipe.difficulty) }}>{recipe.difficulty}</span>}
+            {isCommunity && recipe.ratingCount > 0 && (
+              <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#fffbeb', color: '#92400e' }}>
+                ★ {(recipe.rating || 0).toFixed(1)} ({recipe.ratingCount})
+              </span>
+            )}
+            {isCommunity && recipe.saveCount > 0 && (
+              <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>
+                {recipe.saveCount} saved
+              </span>
+            )}
           </div>
 
           {recipe.missingIngredients?.length > 0 && (
@@ -129,22 +152,40 @@ export default function RecipeCard({
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 2, marginBottom: 12 }}>
-            {[1,2,3,4,5].map(star => (
-              <button key={star} onClick={(e) => { e.stopPropagation(); onRate?.(recipe.title, star); }} style={{
-                background: 'none', border: 'none', cursor: 'pointer', fontSize: 20,
-                color: (ratings[recipe.title] || 0) >= star ? '#f59e0b' : '#e5e7eb',
-                padding: '2px', lineHeight: 1,
-              }}>★</button>
-            ))}
-          </div>
+          {(() => {
+            const rKey = ratingKey || recipe.title;
+            const currentRating = ratings[rKey] || 0;
+            const isLocked = isCommunity && currentRating > 0;
+            return (
+              <div style={{ display: 'flex', gap: 2, marginBottom: 12, alignItems: 'center' }}>
+                {[1,2,3,4,5].map(star => (
+                  <button key={star} onClick={(e) => { e.stopPropagation(); if (!isLocked) onRate?.(recipe.title, star); }}
+                    title={isLocked ? 'You already rated this recipe' : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                    style={{
+                      background: 'none', border: 'none', cursor: isLocked ? 'default' : 'pointer', fontSize: 20,
+                      color: currentRating >= star ? '#f59e0b' : '#e5e7eb',
+                      padding: '2px', lineHeight: 1, opacity: isLocked ? 0.8 : 1,
+                    }}>★</button>
+                ))}
+                {isLocked && <span style={{ fontSize: 10, color: '#9ca3af', marginLeft: 4 }}>Rated</span>}
+              </div>
+            );
+          })()}
 
-          {onMadeIt && (
+          {onMadeIt && !isCommunity && (
             <button onClick={(e) => { e.stopPropagation(); onMadeIt(recipe, servings); }} style={{
               width: '100%', height: 38, borderRadius: 8, border: 'none',
               background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
               cursor: 'pointer', fontFamily: 'inherit', marginBottom: 8,
             }}>✅ Made It</button>
+          )}
+
+          {onCustomize && !isCommunity && (
+            <button onClick={(e) => { e.stopPropagation(); onCustomize(recipe); }} style={{
+              width: '100%', height: 38, borderRadius: 8, border: '1px solid #e5e7eb',
+              background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500,
+              cursor: 'pointer', fontFamily: 'inherit', marginBottom: 8,
+            }}>✏️ Customize</button>
           )}
 
           <div style={{ display: 'flex', gap: 8 }}>
@@ -173,6 +214,16 @@ export default function RecipeCard({
               )}
             </button>
           </div>
+
+          {mode === 'saved' && onShareToggle && (
+            <button onClick={(e) => { e.stopPropagation(); onShareToggle(recipe); }} style={{
+              width: '100%', height: 34, borderRadius: 8, border: '1px solid #e5e7eb',
+              background: recipe.sharedToPublic ? '#eff6ff' : '#fff',
+              color: recipe.sharedToPublic ? '#1d4ed8' : '#6b7280',
+              fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
+              marginTop: 8,
+            }}>{recipe.sharedToPublic ? '🌍 Shared with Community' : '🌍 Share to Community'}</button>
+          )}
 
           {/* Remove from saved — only in saved mode */}
           {mode === 'saved' && (
@@ -263,7 +314,7 @@ export default function RecipeCard({
               Structured ingredients not available for this recipe. Try shuffling for new results.
             </div>
           )}
-          {onMadeIt && recipe.ingredients?.length > 0 && (
+          {onMadeIt && !isCommunity && recipe.ingredients?.length > 0 && (
             <button onClick={(e) => { e.stopPropagation(); onMadeIt(recipe, servings); }} style={{
               width: '100%', height: 42, borderRadius: 10, border: 'none',
               background: '#10b981', color: '#fff', fontSize: 14, fontWeight: 600,

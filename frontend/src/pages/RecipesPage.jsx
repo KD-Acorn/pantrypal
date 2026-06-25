@@ -1,6 +1,10 @@
 import { useState, useMemo } from 'react';
+import { doc, setDoc, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { useAuth } from '../context/AuthContext';
 import RecipeCard from '../components/RecipeCard';
 import MadeItSheet from '../components/MadeItSheet';
+import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
 
 const SORT_OPTIONS = [
   { key: 'date', label: 'Date Saved' },
@@ -33,6 +37,8 @@ function formatDate(iso) {
 }
 
 export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory }) {
+  const { currentUser } = useAuth();
+  const uid = currentUser?.uid;
   const [expandedId, setExpandedId] = useState(null);
   const [sort, setSort] = useState('date');
   const [cuisineFilter, setCuisineFilter] = useState('All');
@@ -40,9 +46,51 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
   const [timeFilter, setTimeFilter] = useState('any');
   const [madeItRecipe, setMadeItRecipe] = useState(null);
   const [madeItPortions, setMadeItPortions] = useState(2);
+  const [customizeRecipe, setCustomizeRecipe] = useState(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [subsExpanded, setSubsExpanded] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState(null);
+
+  async function handleShareToggle(recipe) {
+    if (!uid) return;
+    try {
+      if (recipe.sharedToPublic) {
+        if (recipe.publicRecipeId) {
+          await deleteDoc(doc(db, 'public_recipes', recipe.publicRecipeId));
+        }
+        await updateDoc(doc(db, 'saved_recipes', uid, 'recipes', recipe.id), {
+          sharedToPublic: false, publicRecipeId: null,
+        });
+        toast.show('Recipe removed from community', 'info');
+      } else {
+        const publicId = `pub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        await setDoc(doc(db, 'public_recipes', publicId), {
+          id: publicId,
+          title: recipe.title,
+          description: recipe.description || '',
+          cookTime: recipe.cookTime || '',
+          difficulty: recipe.difficulty || '',
+          cuisine: recipe.cuisine || '',
+          baseServings: recipe.baseServings || 2,
+          ingredients: recipe.ingredients || [],
+          steps: recipe.steps || [],
+          authorUid: uid,
+          authorName: currentUser.displayName || '',
+          sharedAt: serverTimestamp(),
+          rating: 0, ratingCount: 0, saveCount: 0,
+          isCustom: !!recipe.isCustom,
+          originalTitle: recipe.originalTitle || recipe.title,
+        });
+        await updateDoc(doc(db, 'saved_recipes', uid, 'recipes', recipe.id), {
+          sharedToPublic: true, publicRecipeId: publicId,
+        });
+        toast.show('Recipe shared with community', 'success');
+      }
+    } catch (err) {
+      console.error('Share toggle error:', err);
+      toast.show('Failed to update sharing', 'error');
+    }
+  }
 
   const hasActiveFilter = cuisineFilter !== 'All' || diffFilter !== 'All' || timeFilter !== 'any';
 
@@ -147,6 +195,8 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
                 isSaved={true}
                 onUnsave={(recipe) => { saved.unsave(r.id); toast.show('Recipe removed', 'info'); }}
                 onMadeIt={(recipe, portions) => { setMadeItRecipe(recipe); setMadeItPortions(portions); }}
+                onCustomize={(recipe) => setCustomizeRecipe(recipe)}
+                onShareToggle={handleShareToggle}
                 mode="saved"
               />
             ))}
@@ -257,6 +307,14 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
           onClose={() => setMadeItRecipe(null)}
           toast={toast}
           cookHistory={cookHistory}
+        />
+      )}
+      {customizeRecipe && (
+        <CustomizeRecipeSheet
+          recipe={customizeRecipe}
+          onClose={() => setCustomizeRecipe(null)}
+          toast={toast}
+          saved={saved}
         />
       )}
     </div>
