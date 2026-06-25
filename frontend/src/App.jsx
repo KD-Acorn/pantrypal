@@ -9,7 +9,9 @@ import useSavedRecipes from './hooks/useSavedRecipes';
 import useCookHistory from './hooks/useCookHistory';
 import useGroceryList from './hooks/useGroceryList';
 import useSettings from './hooks/useSettings';
+import useMealPlan from './hooks/useMealPlan';
 import ScanPage from './pages/ScanPage';
+import MealPlanPage from './pages/MealPlanPage';
 import SettingsPage from './pages/SettingsPage';
 import PantryPage from './pages/PantryPage';
 import RecipesPage from './pages/RecipesPage';
@@ -59,6 +61,7 @@ function AppContent() {
   const cookHistory = useCookHistory(uid);
   const grocery = useGroceryList(uid);
   const settings = useSettings(uid);
+  const mealPlan = useMealPlan(uid);
 
   if (loading) {
     return (
@@ -80,6 +83,7 @@ function AppContent() {
       {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} />}
       {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} />}
       {tab === 'grocery' && <GroceryPage grocery={grocery} pantry={pantry} saved={saved} toast={toast} />}
+      {tab === 'mealplan' && <MealPlanPage mealPlan={mealPlan} saved={saved} pantry={pantry} grocery={grocery} toast={toast} />}
       {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} />}
       <Toast toast={toast.toast} />
       <BottomNav active={tab} onChange={setTab} />

@@ -66,7 +66,7 @@ app.post('/api/scan', async (req, res) => {
 
 // ── POST /api/recipes — Anthropic Claude ────────────────────────────────────
 app.post('/api/recipes', async (req, res) => {
-  const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights } = req.body;
+  const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights, expiringIngredients, mealTypeHint } = req.body;
   if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
 
   const cuisineClause = cuisineHint && cuisineHint !== 'Any'
@@ -94,6 +94,16 @@ app.post('/api/recipes', async (req, res) => {
     cuisineWeightClause = `\nCUISINE PREFERENCE: The user tends to prefer ${cuisineWeights.join(' and ')} cuisine — lean toward these styles if the ingredients allow, but still offer variety.`;
   }
 
+  let expiringClause = '';
+  if (expiringIngredients?.length) {
+    expiringClause = `\nPRIORITY — EXPIRING INGREDIENTS: The user has these ingredients expiring soon and needs to use them: ${expiringIngredients.join(', ')}. Prioritize recipes that use these ingredients. At least 2 of the 3 recipes MUST use one or more of the expiring ingredients.`;
+  }
+
+  let mealTypeClause = '';
+  if (mealTypeHint) {
+    mealTypeClause = `\nMEAL TYPE: Suggest recipes appropriate for: ${mealTypeHint}.`;
+  }
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -110,7 +120,7 @@ app.post('/api/recipes', async (req, res) => {
           content: `You are an experienced chef and culinary expert. A home cook has these ingredients available:
 ${ingredients.join(', ')}
 
-${cuisineClause}${dietaryClause}${timeClause}${difficultyClause}${cuisineWeightClause}
+${cuisineClause}${dietaryClause}${timeClause}${difficultyClause}${cuisineWeightClause}${expiringClause}${mealTypeClause}
 
 Suggest 3 genuinely appealing, real recipes that a person would actually want to cook and eat.
 Follow these rules strictly:

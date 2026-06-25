@@ -33,6 +33,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
   const [filterCuisine, setFilterCuisine] = useState('Any');
   const [filterTime, setFilterTime] = useState('any');
   const [filterDifficulty, setFilterDifficulty] = useState('Any');
+  const [useExpiring, setUseExpiring] = useState(false);
 
   const lastShuffleTime = useRef(Date.now());
 
@@ -66,6 +67,17 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
       const cuisineHint = filterCuisine !== 'Any' ? filterCuisine : CUISINES[idx];
 
       const body = { ingredients: formatted, cuisineHint };
+
+      if (useExpiring) {
+        const now = Date.now();
+        const weekMs = 7 * 24 * 60 * 60 * 1000;
+        const expiring = pantry.items.filter(i => {
+          if (!i.expiresAt) return false;
+          const exp = new Date(i.expiresAt).getTime();
+          return exp > now && exp - now <= weekMs;
+        }).map(i => typeof i === 'string' ? i : `${i.quantity} ${i.unit} ${i.name}`);
+        if (expiring.length > 0) body.expiringIngredients = expiring;
+      }
 
       if (activeDietaryFilters.length > 0) body.dietaryFilters = activeDietaryFilters;
       if (filterTime !== 'any') body.cookTimeMax = parseInt(filterTime, 10);
@@ -166,6 +178,20 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
             </div>
           )}
 
+          {/* Use Expiring toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <button onClick={() => setUseExpiring(v => !v)} style={{
+              fontSize: 12, fontWeight: 600, padding: '6px 14px', borderRadius: 20,
+              border: useExpiring ? 'none' : '1px solid #fcd34d',
+              background: useExpiring ? '#f59e0b' : '#fffbeb',
+              color: useExpiring ? '#fff' : '#92400e',
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}>⚠️ Use Expiring Soon</button>
+            {useExpiring && (
+              <span style={{ fontSize: 11, color: '#92400e' }}>Prioritizing expiring ingredients</span>
+            )}
+          </div>
+
           {/* Quick filter bar */}
           <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2, marginBottom: 16 }}>
             {CUISINES.map(c => pill(c, filterCuisine === c, () => setFilterCuisine(c)))}
@@ -199,6 +225,13 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
               <div style={{ fontSize: 36, marginBottom: 8 }}>🍳</div>
               <div style={{ fontSize: 14 }}>Hit "Find Recipes" to get started</div>
             </div>
+          )}
+
+          {useExpiring && recipes.length > 0 && (
+            <div style={{
+              background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 10,
+              padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#92400e',
+            }}>⚠️ Showing recipes that use your expiring ingredients</div>
           )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

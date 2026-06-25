@@ -3,6 +3,7 @@ const TABS = [
   { key: 'pantry', label: 'My Pantry', icon: '🧊' },
   { key: 'recipes', label: 'My Recipes', icon: '📖' },
   { key: 'grocery', label: 'Grocery', icon: '🛒' },
+  { key: 'mealplan', label: 'Meal Plan', icon: '📅' },
   { key: 'discover', label: 'Discover', icon: '🍳' },
 ];
 
@@ -24,8 +25,8 @@ export default function BottomNav({ active, onChange }) {
             cursor: 'pointer', color: sel ? '#10b981' : '#9ca3af',
             fontFamily: 'inherit', transition: 'color 0.15s',
           }}>
-            <span style={{ fontSize: 20, lineHeight: 1 }}>{t.icon}</span>
-            <span style={{ fontSize: 11, fontWeight: sel ? 600 : 400 }}>{t.label}</span>
+            <span style={{ fontSize: 18, lineHeight: 1 }}>{t.icon}</span>
+            <span style={{ fontSize: 9, fontWeight: sel ? 600 : 400 }}>{t.label}</span>
           </button>
         );
       })}
