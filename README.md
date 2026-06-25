@@ -1,3 +1,5 @@
+![My Pantry Club](frontend/public/images/full_logo-removebg-preview.png)
+
 # My Pantry Club 🥘
 
 Kitchen inventory & recipe discovery web app. Scan your pantry with AI, manage your ingredients, and discover recipes based on what you already have.

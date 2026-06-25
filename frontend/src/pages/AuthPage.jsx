@@ -107,7 +107,7 @@ export default function AuthPage() {
         boxShadow: '0 2px 16px rgba(0,0,0,0.06)', padding: '28px 24px',
       }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <div style={{ fontSize: 28, fontWeight: 800, color: '#111827' }}>My Pantry Club</div>
+          <img src="/images/full_logo-removebg-preview.png" alt="My Pantry Club" style={{ height: 80, width: 'auto', marginBottom: 8 }} />
           <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>Your AI-powered kitchen companion</div>
         </div>
 
