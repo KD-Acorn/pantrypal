@@ -4,7 +4,7 @@ import Spinner from '../components/Spinner';
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch','pack'];
 
-export default function ScanPage({ pantry, toast }) {
+export default function ScanPage({ pantry, toast, grocery }) {
   const [mode, setMode] = useState('text');
   const [scanSubMode, setScanSubMode] = useState('photo');
   const [textInput, setTextInput] = useState('');
@@ -286,6 +286,21 @@ export default function ScanPage({ pantry, toast }) {
           fontFamily: 'inherit',
         }}>Add {checkedCount} to Pantry</button>
       </div>
+      {grocery && (
+        <button onClick={() => {
+          const toAdd = preview.filter(p => p.checked);
+          if (toAdd.length === 0) return;
+          const added = grocery.addItems(toAdd.map(p => ({ name: p.name, quantity: p.quantity, unit: p.unit, source: 'scan' })));
+          if (added > 0) toast.show(`${added} item${added > 1 ? 's' : ''} added to grocery list`, 'success');
+          else toast.show('Items already in grocery list', 'info');
+          setPreview(null); setDupeActions({}); setStoreBanner(null); setBarcodeBanner(null);
+        }} disabled={checkedCount === 0} style={{
+          width: '100%', height: 38, borderRadius: 10, border: '1px solid #e5e7eb',
+          background: '#fff', color: checkedCount > 0 ? '#374151' : '#9ca3af',
+          fontSize: 13, fontWeight: 500, cursor: checkedCount > 0 ? 'pointer' : 'default',
+          fontFamily: 'inherit', marginTop: 8,
+        }}>🛒 Add to Grocery List instead</button>
+      )}
     </div>
   );
 

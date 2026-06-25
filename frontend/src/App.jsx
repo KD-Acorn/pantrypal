@@ -7,9 +7,11 @@ import usePantry from './hooks/usePantry';
 import useToast from './hooks/useToast';
 import useSavedRecipes from './hooks/useSavedRecipes';
 import useCookHistory from './hooks/useCookHistory';
+import useGroceryList from './hooks/useGroceryList';
 import ScanPage from './pages/ScanPage';
 import PantryPage from './pages/PantryPage';
 import RecipesPage from './pages/RecipesPage';
+import GroceryPage from './pages/GroceryPage';
 import DiscoverPage from './pages/DiscoverPage';
 import AuthPage from './pages/AuthPage';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -80,6 +82,7 @@ function AppContent() {
   const toast = useToast();
   const saved = useSavedRecipes(uid);
   const cookHistory = useCookHistory(uid);
+  const grocery = useGroceryList(uid);
 
   if (loading) {
     return (
@@ -97,9 +100,10 @@ function AppContent() {
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100dvh' }}>
       <UserHeader />
       <MigrationBanner uid={uid} toast={toast} />
-      {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} />}
+      {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} grocery={grocery} />}
       {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} />}
       {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} />}
+      {tab === 'grocery' && <GroceryPage grocery={grocery} pantry={pantry} saved={saved} toast={toast} />}
       {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} />}
       <Toast toast={toast.toast} />
       <BottomNav active={tab} onChange={setTab} />

@@ -2,6 +2,7 @@ const TABS = [
   { key: 'scan', label: 'Scan', icon: '📷' },
   { key: 'pantry', label: 'My Pantry', icon: '🧊' },
   { key: 'recipes', label: 'My Recipes', icon: '📖' },
+  { key: 'grocery', label: 'Grocery', icon: '🛒' },
   { key: 'discover', label: 'Discover', icon: '🍳' },
 ];
 
