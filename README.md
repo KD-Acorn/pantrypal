@@ -1,4 +1,4 @@
-# PantryPal 🥘
+# My Pantry Club 🥘
 
 Kitchen inventory & recipe discovery web app. Scan your pantry with AI, manage your ingredients, and discover recipes based on what you already have.
 
