@@ -69,15 +69,18 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 
 ---
 
-## 🔜 Phase 3 — Community Features
+## ✅ Phase 3 — Community Features (Complete)
 
-- [ ] "Share to Public" toggle on any recipe
-- [ ] Global `public_recipes` Firestore collection
-- [ ] Community recipe feed on Discover page
-- [ ] AI prioritizes community recipes for users with matching ingredients
-- [ ] User-submitted "Final Dish" photo replaces stock placeholder in feed
-- [ ] Report / flag system for inappropriate community recipes
-- [ ] Recipe comments (basic)
+- [x] Customize Recipe with editable ingredients and steps
+- [x] "Just Me" vs "Share with Community" visibility choice
+- [x] public_recipes Firestore collection
+- [x] Share/unshare toggle on saved recipes
+- [x] Community feed tab on Discover page
+- [x] Pantry-matching recipes prioritized in community feed
+- [x] Community recipe rating with running average
+- [x] Save community recipes to personal collection
+- [x] Pagination — 20 recipes per page with Load More
+- [x] Author attribution on community cards
 
 ---
 
