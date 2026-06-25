@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import Spinner from '../components/Spinner';
 import RecipeCard from '../components/RecipeCard';
+import RateLimitModal from '../components/RateLimitModal';
 import MadeItSheet from '../components/MadeItSheet';
 import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
 import CommunityFeed from './CommunityFeed';
@@ -20,7 +21,7 @@ const DIETARY_LABELS = {
   'dairy-free': '🥛 Dairy-Free', 'nut-free': '🥜 Nut-Free', pescatarian: '🐟 Pescatarian',
 };
 
-export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings }) {
+export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings, rateLimit }) {
   const [discoverTab, setDiscoverTab] = useState('ai');
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -28,6 +29,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
   const [madeItRecipe, setMadeItRecipe] = useState(null);
   const [madeItPortions, setMadeItPortions] = useState(2);
   const [customizeRecipe, setCustomizeRecipe] = useState(null);
+  const [limitModal, setLimitModal] = useState(null);
 
   const [sessionDietaryOverrides, setSessionDietaryOverrides] = useState(null);
   const [filterCuisine, setFilterCuisine] = useState('Any');
@@ -56,6 +58,10 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
   async function fetchRecipes(idx) {
     if (pantry.items.length === 0) {
       toast.show('Add ingredients to your pantry first', 'info');
+      return;
+    }
+    if (rateLimit && !rateLimit.canUse('recipe_generate')) {
+      setLimitModal({ feature: 'recipe_generate', limit: 5 });
       return;
     }
     setLoading(true);
@@ -98,6 +104,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
       if (!resp.ok) throw new Error('Recipe fetch failed');
       const data = await resp.json();
       setRecipes(data.recipes || []);
+      if (data.recipes?.length && rateLimit) rateLimit.increment('recipe_generate');
       if (!data.recipes?.length) toast.show('No recipes found — try adding more ingredients', 'info');
     } catch {
       toast.show('Failed to load recipes — please try again', 'error');
@@ -240,6 +247,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
                 key={i}
                 recipe={r}
                 pantryItems={pantry.items}
+                pantry={pantry}
                 ratings={saved.ratings}
                 onRate={(title, stars) => saved.rate(title, stars)}
                 isSaved={saved.isSaved(r.title)}
@@ -251,6 +259,9 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
                 onMadeIt={(recipe, portions) => { setMadeItRecipe(recipe); setMadeItPortions(portions); }}
                 onCustomize={(recipe) => setCustomizeRecipe(recipe)}
                 mode="discover"
+                settings={settings}
+                rateLimit={rateLimit ? { ...rateLimit, showLimitModal: (f) => setLimitModal({ feature: f, limit: 10 }) } : null}
+                cookHistory={cookHistory}
               />
             ))}
           </div>
@@ -283,6 +294,9 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
           toast={toast}
           saved={saved}
         />
+      )}
+      {limitModal && (
+        <RateLimitModal feature={limitModal.feature} limit={limitModal.limit} onClose={() => setLimitModal(null)} />
       )}
     </div>
   );

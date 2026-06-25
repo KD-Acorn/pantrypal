@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import Spinner from '../components/Spinner';
+import RateLimitModal from '../components/RateLimitModal';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch','pack'];
 
-export default function ScanPage({ pantry, toast, grocery }) {
+export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
   const [mode, setMode] = useState('text');
   const [scanSubMode, setScanSubMode] = useState('photo');
   const [textInput, setTextInput] = useState('');
@@ -16,6 +17,7 @@ export default function ScanPage({ pantry, toast, grocery }) {
   const [dupeActions, setDupeActions] = useState({});
   const [scanError, setScanError] = useState(null);
   const [barcodeManualInput, setBarcodeManualInput] = useState('');
+  const [limitModal, setLimitModal] = useState(null);
 
   function handleTextAdd() {
     const names = textInput.split(',').map(s => s.trim()).filter(Boolean);
@@ -36,6 +38,10 @@ export default function ScanPage({ pantry, toast, grocery }) {
 
   async function handleImageUpload(file) {
     if (!file) return;
+    if (rateLimit && !rateLimit.canUse('scan_camera')) {
+      setLimitModal({ feature: 'scan_camera', limit: 10 });
+      return;
+    }
     setScanning(true);
     setScanMsg('Analyzing your photo...');
     setStoreBanner(null);
@@ -56,6 +62,7 @@ export default function ScanPage({ pantry, toast, grocery }) {
       }
       setPreview(items.map(name => ({ name, quantity: 1, unit: 'item', checked: true })));
       setDupeActions({});
+      if (rateLimit) rateLimit.increment('scan_camera');
     } catch {
       toast.show('Scan failed — try adding ingredients manually', 'error');
     } finally {
@@ -66,6 +73,10 @@ export default function ScanPage({ pantry, toast, grocery }) {
 
   async function handleReceiptUpload(file) {
     if (!file) return;
+    if (rateLimit && !rateLimit.canUse('scan_receipt')) {
+      setLimitModal({ feature: 'scan_receipt', limit: 5 });
+      return;
+    }
     setScanning(true);
     setScanMsg('Reading receipt...');
     setStoreBanner(null);
@@ -92,6 +103,7 @@ export default function ScanPage({ pantry, toast, grocery }) {
       })));
       setDupeActions({});
       setStoreBanner(data.detectedStore || null);
+      if (rateLimit) rateLimit.increment('scan_receipt');
     } catch {
       toast.show('Receipt scan failed — try better lighting or a flatter photo', 'error');
     } finally {
@@ -102,6 +114,10 @@ export default function ScanPage({ pantry, toast, grocery }) {
 
   async function handleBarcodeUpload(file) {
     if (!file) return;
+    if (rateLimit && !rateLimit.canUse('scan_barcode')) {
+      setLimitModal({ feature: 'scan_barcode', limit: 10 });
+      return;
+    }
     setScanning(true);
     setScanMsg('Scanning barcode...');
     setBarcodeBanner(null);
@@ -142,6 +158,7 @@ export default function ScanPage({ pantry, toast, grocery }) {
       })));
       setDupeActions({});
       setBarcodeBanner({ productName: data.productName, brand: data.brand });
+      if (rateLimit) rateLimit.increment('scan_barcode');
     } catch {
       toast.show('Barcode scan failed — please try again', 'error');
     } finally {
@@ -542,6 +559,9 @@ export default function ScanPage({ pantry, toast, grocery }) {
 
       {/* Shared preview checklist — used by scan, receipt, and barcode modes */}
       {(mode === 'scan' || mode === 'receipt') && preview && previewChecklist}
+      {limitModal && (
+        <RateLimitModal feature={limitModal.feature} limit={limitModal.limit} onClose={() => setLimitModal(null)} />
+      )}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import useCookHistory from './hooks/useCookHistory';
 import useGroceryList from './hooks/useGroceryList';
 import useSettings from './hooks/useSettings';
 import useMealPlan from './hooks/useMealPlan';
+import useRateLimit from './hooks/useRateLimit';
 import ScanPage from './pages/ScanPage';
 import MealPlanPage from './pages/MealPlanPage';
 import SettingsPage from './pages/SettingsPage';
@@ -62,6 +63,7 @@ function AppContent() {
   const grocery = useGroceryList(uid);
   const settings = useSettings(uid);
   const mealPlan = useMealPlan(uid);
+  const rateLimit = useRateLimit();
 
   if (loading) {
     return (
@@ -79,15 +81,15 @@ function AppContent() {
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100dvh' }}>
       <UserHeader onOpenSettings={() => setShowSettings(true)} />
       <MigrationBanner uid={uid} toast={toast} />
-      {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} grocery={grocery} />}
+      {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} grocery={grocery} rateLimit={rateLimit} />}
       {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} />}
       {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} />}
       {tab === 'grocery' && <GroceryPage grocery={grocery} pantry={pantry} saved={saved} toast={toast} />}
       {tab === 'mealplan' && <MealPlanPage mealPlan={mealPlan} saved={saved} pantry={pantry} grocery={grocery} toast={toast} />}
-      {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} />}
+      {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} />}
       <Toast toast={toast.toast} />
       <BottomNav active={tab} onChange={setTab} />
-      {showSettings && <SettingsPage onClose={() => setShowSettings(false)} settings={settings} />}
+      {showSettings && <SettingsPage onClose={() => setShowSettings(false)} settings={settings} rateLimit={rateLimit} />}
     </div>
   );
 }

@@ -13,7 +13,7 @@ const DIETARY_OPTIONS = [
 
 const CUISINE_OPTIONS = ['Italian', 'Asian', 'Mexican', 'Quick & Easy', 'Mediterranean', 'Any'];
 
-export default function SettingsPage({ onClose, settings }) {
+export default function SettingsPage({ onClose, settings, rateLimit }) {
   const { currentUser, signOut } = useAuth();
   const [nameInput, setNameInput] = useState(settings.displayName || currentUser?.displayName || '');
   const [nameSaving, setNameSaving] = useState(false);
@@ -179,6 +179,38 @@ export default function SettingsPage({ onClose, settings }) {
               );
             })}
           </div>
+
+          {/* Today's Usage */}
+          {rateLimit && (() => {
+            const usages = rateLimit.getRemainingAll();
+            return (
+              <>
+                {sectionTitle("Today's Usage")}
+                {sectionLabel('Resets at midnight')}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {usages.map(u => (
+                    <div key={u.feature} style={{
+                      padding: '10px 12px', background: '#f9fafb', borderRadius: 10,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ fontSize: 13, color: '#374151' }}>{u.label}</span>
+                        <span style={{ fontSize: 12, color: u.remaining === 0 ? '#ef4444' : '#6b7280', fontWeight: 500 }}>
+                          {u.used}/{u.limit}
+                        </span>
+                      </div>
+                      <div style={{ height: 4, background: '#e5e7eb', borderRadius: 2 }}>
+                        <div style={{
+                          height: 4, borderRadius: 2, transition: 'width 0.3s',
+                          width: `${Math.min(100, (u.used / u.limit) * 100)}%`,
+                          background: u.used >= u.limit ? '#ef4444' : u.used >= u.limit * 0.8 ? '#f59e0b' : '#10b981',
+                        }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
 
           {/* Notification Preferences */}
           {sectionTitle('Notification Preferences')}

@@ -380,5 +380,54 @@ app.post('/api/scan-barcode', async (req, res) => {
   }
 });
 
+// ── POST /api/substitutions — Anthropic Claude substitution suggestions ──────
+app.post('/api/substitutions', async (req, res) => {
+  const { ingredient, recipeTitle, recipeContext } = req.body;
+  if (!ingredient) return res.status(400).json({ error: 'ingredient is required' });
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 800,
+        messages: [{
+          role: 'user',
+          content: `A home cook is making '${recipeTitle || 'a recipe'}' and doesn't have '${ingredient}'.${recipeContext ? ` Recipe context: ${recipeContext}` : ''}
+Suggest 3 practical substitutions that would work in this recipe.
+For each substitution return JSON with:
+{
+  "name": "the substitute ingredient",
+  "ratio": "how much to use, e.g. '1:1', 'use 3/4 the amount'",
+  "notes": "1 sentence on flavor/texture difference",
+  "commonlyAvailable": true or false
+}
+Return ONLY a valid JSON array of 3 substitution objects. No markdown, no preamble.`,
+        }],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error('Substitution API error:', err);
+      return res.status(502).json({ error: 'Failed to get substitutions' });
+    }
+
+    const data = await response.json();
+    const raw = data.content?.[0]?.text || '[]';
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    const substitutions = JSON.parse(cleaned);
+    res.json({ substitutions: Array.isArray(substitutions) ? substitutions : [] });
+  } catch (err) {
+    console.error('Substitution error:', err);
+    res.status(500).json({ error: 'Substitution suggestion failed' });
+  }
+});
+
 const PORT = process.env.PORT || 3003;
 app.listen(PORT, () => console.log(`PantryPal API listening on :${PORT}`));

@@ -1,4 +1,9 @@
 import { useState, useMemo } from 'react';
+import SHOPPING_PARTNERS from '../config/shoppingPartners';
+import Spinner from './Spinner';
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
+const CLICKS_KEY = 'pantrypal_affiliate_clicks';
 
 function formatAmount(n) {
   if (n >= 1) return Math.round(n * 10) / 10;
@@ -18,6 +23,18 @@ function pantryHasIngredient(pantryItems, ingredientName) {
   });
 }
 
+function logAffiliateClick(partnerId, ingredientName, recipeTitle) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CLICKS_KEY) || '[]');
+    all.push({ partnerId, ingredientName, recipeTitle, clickedAt: new Date().toISOString() });
+    localStorage.setItem(CLICKS_KEY, JSON.stringify(all));
+  } catch {}
+}
+
+function buildShopUrl(partner, ingredient) {
+  return partner.urlTemplate.replace('{ingredient}', encodeURIComponent(ingredient));
+}
+
 const diffColor = d => d === 'Easy' ? '#10b981' : d === 'Medium' ? '#f59e0b' : '#ef4444';
 
 function MatchBadge({ score }) {
@@ -32,9 +49,133 @@ function MatchBadge({ score }) {
   );
 }
 
+// ── Missing Ingredient Pill with shopping link ───────────────────────────────
+function MissingPill({ name, recipeTitle, enabledPartners, onOpenSettings }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  function handleClick(e) {
+    e.stopPropagation();
+    if (enabledPartners.length === 1) {
+      const p = enabledPartners[0];
+      logAffiliateClick(p.id, name, recipeTitle);
+      window.open(buildShopUrl(p, name), '_blank', 'noopener');
+    } else if (enabledPartners.length > 1) {
+      setPickerOpen(v => !v);
+    }
+  }
+
+  if (enabledPartners.length === 0) {
+    return (
+      <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 20, background: '#fef2f2', color: '#991b1b' }}>{name}</span>
+    );
+  }
+
+  return (
+    <span style={{ position: 'relative', display: 'inline-block' }}>
+      <button onClick={handleClick} style={{
+        fontSize: 12, padding: '2px 8px', borderRadius: 20, background: '#fef2f2',
+        color: '#991b1b', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+        display: 'inline-flex', alignItems: 'center', gap: 3,
+      }}>
+        {name} 🛒
+      </button>
+      {pickerOpen && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 20,
+          background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.1)', padding: 6,
+          display: 'flex', flexDirection: 'column', gap: 4, minWidth: 160,
+        }}>
+          {enabledPartners.map(p => (
+            <button key={p.id} onClick={(e) => {
+              e.stopPropagation();
+              logAffiliateClick(p.id, name, recipeTitle);
+              window.open(buildShopUrl(p, name), '_blank', 'noopener');
+              setPickerOpen(false);
+            }} style={{
+              fontSize: 12, padding: '6px 10px', borderRadius: 6, border: 'none',
+              background: '#f9fafb', color: '#374151', cursor: 'pointer',
+              fontFamily: 'inherit', textAlign: 'left', fontWeight: 500,
+            }}>{p.icon} {p.name}</button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ── Substitution inline dropdown ─────────────────────────────────────────────
+function SubSuggest({ ingredient, recipeTitle, pantry, rateLimit }) {
+  const [subs, setSubs] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  async function fetchSubs() {
+    if (subs) return;
+    if (rateLimit && !rateLimit.canUse('substitution_suggest')) {
+      rateLimit.showLimitModal('substitution_suggest');
+      return;
+    }
+    setLoading(true);
+    try {
+      const resp = await fetch(`${API}/api/substitutions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ingredient, recipeTitle }),
+      });
+      if (!resp.ok) throw new Error();
+      const data = await resp.json();
+      setSubs(data.substitutions || []);
+      if (rateLimit) rateLimit.increment('substitution_suggest');
+    } catch {
+      setSubs([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ display: 'inline' }}>
+      <button onClick={fetchSubs} style={{
+        fontSize: 10, color: '#6b7280', background: 'none', border: 'none',
+        cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline',
+        marginLeft: 4,
+      }}>
+        {loading ? '...' : 'Sub?'}
+      </button>
+      {subs && subs.length > 0 && (
+        <div style={{
+          marginTop: 4, padding: 8, background: '#fefce8', border: '1px solid #fde68a',
+          borderRadius: 8, fontSize: 12,
+        }}>
+          {subs.map((s, i) => (
+            <div key={i} style={{ marginBottom: i < subs.length - 1 ? 8 : 0 }}>
+              <div style={{ fontWeight: 600, color: '#374151' }}>
+                {s.name} <span style={{ fontWeight: 400, color: '#6b7280' }}>({s.ratio})</span>
+              </div>
+              <div style={{ color: '#6b7280', marginBottom: 3 }}>{s.notes}</div>
+              {pantry && (
+                <button onClick={() => pantry.add([{ name: s.name, quantity: 1, unit: 'item' }])} style={{
+                  fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 4,
+                  background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}>+ Add to Pantry</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {subs && subs.length === 0 && (
+        <span style={{ fontSize: 10, color: '#9ca3af', marginLeft: 4 }}>No subs found</span>
+      )}
+    </div>
+  );
+}
+
+// ── Main RecipeCard ──────────────────────────────────────────────────────────
 export default function RecipeCard({
   recipe,
   pantryItems = [],
+  pantry,
   ratings = {},
   onRate,
   ratingKey,
@@ -47,12 +188,20 @@ export default function RecipeCard({
   onCustomize,
   onShareToggle,
   mode = 'discover',
+  settings,
+  rateLimit,
+  cookHistory,
 }) {
   const isCommunity = mode === 'community';
   const [showFull, setShowFull] = useState(false);
   const [servings, setServings] = useState(recipe.baseServings || 2);
   const [nutritionTip, setNutritionTip] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+
+  const enabledPartners = useMemo(() => {
+    const ids = settings?.shoppingPartners || [];
+    return SHOPPING_PARTNERS.filter(p => ids.includes(p.id));
+  }, [settings?.shoppingPartners]);
 
   const scaleFactor = (recipe.baseServings && recipe.baseServings > 0)
     ? servings / recipe.baseServings : 1;
@@ -64,6 +213,15 @@ export default function RecipeCard({
       scaledAmount: ing.amount * scaleFactor,
     }));
   }, [recipe.ingredients, scaleFactor]);
+
+  const pastSubs = useMemo(() => {
+    if (!cookHistory?.substitutions) return {};
+    const map = {};
+    cookHistory.substitutions
+      .filter(s => s.recipeTitle === recipe.title)
+      .forEach(s => { if (s.original?.name) map[s.original.name.toLowerCase()] = s.substituted; });
+    return map;
+  }, [cookHistory?.substitutions, recipe.title]);
 
   function adjustServings(delta) {
     setServings(s => Math.max(1, Math.min(99, s + delta)));
@@ -91,7 +249,6 @@ export default function RecipeCard({
       onClick={collapsed ? onToggleCollapse : undefined}
     >
       <div style={{ padding: collapsed ? '14px 20px' : 20 }}>
-        {/* Title row: title + match badge + save button */}
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
           <h3 style={{
             fontSize: collapsed ? 14 : 16, fontWeight: 600, color: '#111827',
@@ -108,45 +265,45 @@ export default function RecipeCard({
           </div>
         </div>
 
-        {/* Summary content — visible when not collapsed */}
         <div style={{
-          maxHeight: summaryVisible ? 1000 : 0,
+          maxHeight: summaryVisible ? 2000 : 0,
           overflow: 'hidden',
           transition: 'max-height 0.3s ease',
         }}>
           {isCommunity && recipe.authorName && (
-            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
-              By {recipe.authorName}
-            </div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>By {recipe.authorName}</div>
           )}
 
           <p style={{ fontSize: 13, color: '#6b7280', lineHeight: 1.5, marginBottom: 10, marginTop: 8 }}>{recipe.description}</p>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-            {isCommunity && (
-              <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#ecfdf5', color: '#065f46' }}>Community Recipe</span>
-            )}
+            {isCommunity && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#ecfdf5', color: '#065f46' }}>Community Recipe</span>}
             {recipe.cuisine && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#374151' }}>{recipe.cuisine}</span>}
             {recipe.cookTime && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>⏱ {recipe.cookTime}</span>}
             {recipe.difficulty && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: diffColor(recipe.difficulty) }}>{recipe.difficulty}</span>}
             {isCommunity && recipe.ratingCount > 0 && (
-              <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#fffbeb', color: '#92400e' }}>
-                ★ {(recipe.rating || 0).toFixed(1)} ({recipe.ratingCount})
-              </span>
+              <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#fffbeb', color: '#92400e' }}>★ {(recipe.rating || 0).toFixed(1)} ({recipe.ratingCount})</span>
             )}
             {isCommunity && recipe.saveCount > 0 && (
-              <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>
-                {recipe.saveCount} saved
-              </span>
+              <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>{recipe.saveCount} saved</span>
             )}
           </div>
 
+          {/* Missing ingredients with shopping links */}
           {recipe.missingIngredients?.length > 0 && (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 500, color: '#9ca3af', marginBottom: 4 }}>MISSING</div>
+              <div style={{ fontSize: 11, fontWeight: 500, color: '#9ca3af', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                MISSING
+                {enabledPartners.length === 0 && (
+                  <button onClick={(e) => { e.stopPropagation(); settings?.onOpenSettings?.(); }} style={{
+                    fontSize: 10, color: '#10b981', background: 'none', border: 'none',
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}>Shop for ingredients</button>
+                )}
+              </div>
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                 {recipe.missingIngredients.map(m => (
-                  <span key={m} style={{ fontSize: 12, padding: '2px 8px', borderRadius: 20, background: '#fef2f2', color: '#991b1b' }}>{m}</span>
+                  <MissingPill key={m} name={m} recipeTitle={recipe.title} enabledPartners={enabledPartners} />
                 ))}
               </div>
             </div>
@@ -193,25 +350,11 @@ export default function RecipeCard({
               flex: 1, height: 38, borderRadius: 8, border: '1px solid #e5e7eb',
               background: showFull ? '#f0fdf4' : '#fff', color: showFull ? '#059669' : '#374151',
               fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
-            }}>
-              Full Recipe {showFull ? '▴' : '▾'}
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); setNutritionTip(true); }}
-              onMouseLeave={() => setNutritionTip(false)}
-              style={{
-                flex: 1, height: 38, borderRadius: 8, border: '1px solid #f0f0f0',
-                background: '#fafafa', color: '#c0c0c0', fontSize: 13, fontWeight: 500,
-                cursor: 'default', fontFamily: 'inherit', position: 'relative',
-              }}>
+            }}>Full Recipe {showFull ? '▴' : '▾'}</button>
+            <button onClick={(e) => { e.stopPropagation(); setNutritionTip(true); }} onMouseLeave={() => setNutritionTip(false)}
+              style={{ flex: 1, height: 38, borderRadius: 8, border: '1px solid #f0f0f0', background: '#fafafa', color: '#c0c0c0', fontSize: 13, fontWeight: 500, cursor: 'default', fontFamily: 'inherit', position: 'relative' }}>
               Nutrition ▾
-              {nutritionTip && (
-                <span style={{
-                  position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%',
-                  transform: 'translateX(-50%)', background: '#1f2937', color: '#fff',
-                  fontSize: 11, padding: '4px 10px', borderRadius: 6, whiteSpace: 'nowrap', zIndex: 10,
-                }}>Nutritional facts coming in v2</span>
-              )}
+              {nutritionTip && <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', background: '#1f2937', color: '#fff', fontSize: 11, padding: '4px 10px', borderRadius: 6, whiteSpace: 'nowrap', zIndex: 10 }}>Nutritional facts coming in v2</span>}
             </button>
           </div>
 
@@ -220,12 +363,10 @@ export default function RecipeCard({
               width: '100%', height: 34, borderRadius: 8, border: '1px solid #e5e7eb',
               background: recipe.sharedToPublic ? '#eff6ff' : '#fff',
               color: recipe.sharedToPublic ? '#1d4ed8' : '#6b7280',
-              fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
-              marginTop: 8,
+              fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', marginTop: 8,
             }}>{recipe.sharedToPublic ? '🌍 Shared with Community' : '🌍 Share to Community'}</button>
           )}
 
-          {/* Remove from saved — only in saved mode */}
           {mode === 'saved' && (
             <div style={{ marginTop: 10, textAlign: 'center' }}>
               {confirmRemove ? (
@@ -238,9 +379,7 @@ export default function RecipeCard({
                 </div>
               ) : (
                 <button onClick={(e) => { e.stopPropagation(); setConfirmRemove(true); }}
-                  style={{ fontSize: 12, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
-                  Remove from saved
-                </button>
+                  style={{ fontSize: 12, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Remove from saved</button>
               )}
             </div>
           )}
@@ -249,7 +388,7 @@ export default function RecipeCard({
 
       {/* Full recipe detail — ingredients + steps */}
       <div style={{
-        maxHeight: fullVisible ? 2000 : 0,
+        maxHeight: fullVisible ? 3000 : 0,
         overflow: 'hidden',
         transition: 'max-height 0.35s ease',
       }}>
@@ -259,22 +398,10 @@ export default function RecipeCard({
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>Ingredients</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <button onClick={() => adjustServings(-1)} style={{
-                    width: 28, height: 28, borderRadius: 6, border: '1px solid #e5e7eb',
-                    background: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center', color: '#374151', lineHeight: 1,
-                  }}>−</button>
-                  <input type="number" min="1" max="99" value={servings}
-                    onChange={e => handleServingsInput(e.target.value)}
-                    style={{
-                      width: 40, height: 28, border: '1px solid #e5e7eb', borderRadius: 6,
-                      textAlign: 'center', fontSize: 13, fontFamily: 'inherit', outline: 'none',
-                    }} />
-                  <button onClick={() => adjustServings(1)} style={{
-                    width: 28, height: 28, borderRadius: 6, border: '1px solid #e5e7eb',
-                    background: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center', color: '#374151', lineHeight: 1,
-                  }}>+</button>
+                  <button onClick={() => adjustServings(-1)} style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151', lineHeight: 1 }}>−</button>
+                  <input type="number" min="1" max="99" value={servings} onChange={e => handleServingsInput(e.target.value)}
+                    style={{ width: 40, height: 28, border: '1px solid #e5e7eb', borderRadius: 6, textAlign: 'center', fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
+                  <button onClick={() => adjustServings(1)} style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid #e5e7eb', background: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151', lineHeight: 1 }}>+</button>
                   <span style={{ fontSize: 12, color: '#6b7280' }}>servings</span>
                 </div>
               </div>
@@ -284,17 +411,33 @@ export default function RecipeCard({
                   const isMissing = recipe.missingIngredients?.some(m =>
                     m.toLowerCase().includes(ing.name.toLowerCase()) || ing.name.toLowerCase().includes(m.toLowerCase())
                   );
+                  const pastSub = pastSubs[ing.name.toLowerCase()];
                   return (
-                    <div key={j} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '6px 10px', borderRadius: 8,
-                      background: inPantry ? '#f0fdf4' : isMissing ? '#fafafa' : '#fff',
-                    }}>
-                      <span style={{ fontSize: 13, color: inPantry ? '#059669' : isMissing ? '#9ca3af' : '#374151' }}>
-                        • {formatAmount(ing.scaledAmount)} {ing.unit} {ing.name}
-                      </span>
-                      {inPantry && <span style={{ fontSize: 10, fontWeight: 500, color: '#059669', background: '#ecfdf5', padding: '1px 6px', borderRadius: 10 }}>✓ in pantry</span>}
-                      {!inPantry && isMissing && <span style={{ fontSize: 10, fontWeight: 500, color: '#9ca3af', background: '#f3f4f6', padding: '1px 6px', borderRadius: 10 }}>shopping list</span>}
+                    <div key={j}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '6px 10px', borderRadius: 8,
+                        background: inPantry ? '#f0fdf4' : isMissing ? '#fafafa' : '#fff',
+                      }}>
+                        <span style={{ fontSize: 13, color: inPantry ? '#059669' : isMissing ? '#9ca3af' : '#374151', flex: 1 }}>
+                          • {formatAmount(ing.scaledAmount)} {ing.unit} {ing.name}
+                          {isMissing && !inPantry && (
+                            <SubSuggest ingredient={ing.name} recipeTitle={recipe.title} pantry={pantry} rateLimit={rateLimit} />
+                          )}
+                        </span>
+                        {inPantry && <span style={{ fontSize: 10, fontWeight: 500, color: '#059669', background: '#ecfdf5', padding: '1px 6px', borderRadius: 10 }}>✓ in pantry</span>}
+                        {!inPantry && isMissing && enabledPartners.length > 0 && (
+                          <MissingPill name={ing.name} recipeTitle={recipe.title} enabledPartners={enabledPartners} />
+                        )}
+                        {!inPantry && isMissing && enabledPartners.length === 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 500, color: '#9ca3af', background: '#f3f4f6', padding: '1px 6px', borderRadius: 10 }}>shopping list</span>
+                        )}
+                      </div>
+                      {pastSub && (
+                        <div style={{ marginLeft: 26, fontSize: 11, color: '#6b7280', fontStyle: 'italic', padding: '2px 0' }}>
+                          Last time you used {pastSub.name} instead
+                        </div>
+                      )}
                     </div>
                   );
                 })}
