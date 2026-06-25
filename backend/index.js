@@ -270,5 +270,84 @@ app.post('/api/store-abbreviations/add', async (req, res) => {
   }
 });
 
+// ── POST /api/scan-barcode — GPT-4o barcode extraction + Open Food Facts ──────
+app.post('/api/scan-barcode', async (req, res) => {
+  const { imageBase64, mimeType } = req.body;
+  if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
+
+  try {
+    const visionResp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        max_tokens: 100,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Look at this image and find any barcode or QR code. Return ONLY the barcode number as a plain string with no spaces, dashes, or other characters. If no barcode is found, return null. Example response: 0123456789012',
+            },
+            {
+              type: 'image_url',
+              image_url: { url: `data:${mimeType || 'image/jpeg'};base64,${imageBase64}` },
+            },
+          ],
+        }],
+      }),
+    });
+
+    if (!visionResp.ok) {
+      console.error('OpenAI barcode error:', await visionResp.text());
+      return res.json({ error: 'scan_failed', message: 'Barcode scan failed. Please try again.' });
+    }
+
+    const visionData = await visionResp.json();
+    const barcodeRaw = (visionData.choices?.[0]?.message?.content || '').trim();
+    const barcode = barcodeRaw.replace(/[^0-9]/g, '');
+
+    if (!barcode || barcodeRaw.toLowerCase() === 'null') {
+      return res.json({ error: 'no_barcode', message: 'No barcode detected. Try better lighting or a clearer angle.' });
+    }
+
+    const offResp = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+    const offData = await offResp.json();
+
+    if (!offData || offData.status === 0) {
+      return res.json({ error: 'not_found', message: 'Product not found in database. Try adding manually.', barcode });
+    }
+
+    const product = offData.product || {};
+    const productName = product.product_name || product.product_name_en || 'Unknown product';
+    const brand = product.brands || null;
+
+    let quantity = 1;
+    let unit = 'item';
+    const qtyStr = product.quantity || '';
+    const qtyMatch = qtyStr.match(/^([\d.]+)\s*(g|kg|ml|l|oz|lb|fl oz)/i);
+    if (qtyMatch) {
+      quantity = parseFloat(qtyMatch[1]);
+      const u = qtyMatch[2].toLowerCase();
+      if (u === 'kg') { quantity = quantity * 1000; unit = 'g'; }
+      else if (u === 'fl oz') { unit = 'oz'; }
+      else { unit = u; }
+    }
+
+    res.json({
+      ingredients: [{ name: productName, quantity, unit }],
+      productName,
+      brand,
+      barcode,
+    });
+  } catch (err) {
+    console.error('Barcode scan error:', err);
+    res.json({ error: 'scan_failed', message: 'Barcode scan failed. Please try again.' });
+  }
+});
+
 const PORT = process.env.PORT || 3003;
 app.listen(PORT, () => console.log(`PantryPal API listening on :${PORT}`));

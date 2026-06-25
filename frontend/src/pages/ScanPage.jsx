@@ -6,13 +6,16 @@ const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml',
 
 export default function ScanPage({ pantry, toast }) {
   const [mode, setMode] = useState('text');
+  const [scanSubMode, setScanSubMode] = useState('photo');
   const [textInput, setTextInput] = useState('');
   const [scanning, setScanning] = useState(false);
   const [scanMsg, setScanMsg] = useState('');
   const [preview, setPreview] = useState(null);
   const [storeBanner, setStoreBanner] = useState(null);
+  const [barcodeBanner, setBarcodeBanner] = useState(null);
   const [dupeActions, setDupeActions] = useState({});
   const [scanError, setScanError] = useState(null);
+  const [barcodeManualInput, setBarcodeManualInput] = useState('');
 
   function handleTextAdd() {
     const names = textInput.split(',').map(s => s.trim()).filter(Boolean);
@@ -97,6 +100,56 @@ export default function ScanPage({ pantry, toast }) {
     }
   }
 
+  async function handleBarcodeUpload(file) {
+    if (!file) return;
+    setScanning(true);
+    setScanMsg('Scanning barcode...');
+    setBarcodeBanner(null);
+    setScanError(null);
+    setBarcodeManualInput('');
+    try {
+      const base64 = await fileToBase64(file);
+      const resp = await fetch(`${API}/api/scan-barcode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: base64, mimeType: file.type }),
+      });
+      if (!resp.ok) throw new Error('Barcode scan failed');
+      const data = await resp.json();
+
+      if (data.error === 'no_barcode') {
+        setScanError('no_barcode');
+        return;
+      }
+      if (data.error === 'not_found') {
+        setScanError('not_found');
+        setBarcodeManualInput(data.barcode || '');
+        return;
+      }
+      if (data.error) {
+        setScanError('scan_failed');
+        return;
+      }
+
+      const items = (data.ingredients || []).filter(i => i && i.name);
+      if (items.length === 0) {
+        setScanError('scan_failed');
+        return;
+      }
+      setPreview(items.map(i => ({
+        name: i.name, quantity: i.quantity || 1,
+        unit: UNITS.includes(i.unit) ? i.unit : 'item', checked: true,
+      })));
+      setDupeActions({});
+      setBarcodeBanner({ productName: data.productName, brand: data.brand });
+    } catch {
+      toast.show('Barcode scan failed — please try again', 'error');
+    } finally {
+      setScanning(false);
+      setScanMsg('');
+    }
+  }
+
   function updatePreviewItem(idx, changes) {
     setPreview(prev => prev.map((p, i) => i === idx ? { ...p, ...changes } : p));
   }
@@ -125,7 +178,7 @@ export default function ScanPage({ pantry, toast }) {
   const checkedCount = preview ? preview.filter(p => p.checked).length : 0;
 
   const tabBtn = (key, label) => (
-    <button onClick={() => { setMode(key); setPreview(null); setStoreBanner(null); setScanError(null); }} style={{
+    <button onClick={() => { setMode(key); setPreview(null); setStoreBanner(null); setBarcodeBanner(null); setScanError(null); setBarcodeManualInput(''); }} style={{
       flex: 1, padding: '10px 0', fontSize: 13, fontWeight: mode === key ? 600 : 400,
       color: mode === key ? '#10b981' : '#6b7280', background: 'none', border: 'none',
       borderBottom: `2px solid ${mode === key ? '#10b981' : 'transparent'}`,
@@ -158,6 +211,14 @@ export default function ScanPage({ pantry, toast }) {
           padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#6b7280',
         }}>
           📄 Receipt scanned — review items before adding to pantry
+        </div>
+      )}
+      {barcodeBanner && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10,
+          padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#166534',
+        }}>
+          📦 Found: <strong>{barcodeBanner.productName}</strong>{barcodeBanner.brand ? ` by ${barcodeBanner.brand}` : ''}
         </div>
       )}
       <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>
@@ -213,7 +274,7 @@ export default function ScanPage({ pantry, toast }) {
         })}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => { setPreview(null); setDupeActions({}); setStoreBanner(null); }} style={{
+        <button onClick={() => { setPreview(null); setDupeActions({}); setStoreBanner(null); setBarcodeBanner(null); }} style={{
           flex: 1, height: 44, borderRadius: 10, border: '1px solid #e5e7eb',
           background: '#fff', color: '#374151', fontSize: 14, fontWeight: 500,
           cursor: 'pointer', fontFamily: 'inherit',
@@ -261,10 +322,27 @@ export default function ScanPage({ pantry, toast }) {
       )}
 
       {/* Photo scan mode */}
-      {/* Mobile fix: use <label> trigger instead of ref.click() */}
-      {/* ref.click() is blocked by mobile Safari and Chrome as a security measure */}
       {mode === 'scan' && !preview && (
         <div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: '#f3f4f6', borderRadius: 10, padding: 3 }}>
+            <button onClick={() => { setScanSubMode('photo'); setScanError(null); setBarcodeManualInput(''); }} style={{
+              flex: 1, height: 36, borderRadius: 8, border: 'none',
+              background: scanSubMode === 'photo' ? '#fff' : 'transparent',
+              color: scanSubMode === 'photo' ? '#374151' : '#6b7280',
+              fontSize: 13, fontWeight: scanSubMode === 'photo' ? 600 : 400,
+              cursor: 'pointer', fontFamily: 'inherit',
+              boxShadow: scanSubMode === 'photo' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+            }}>🍽 Food Photo</button>
+            <button onClick={() => { setScanSubMode('barcode'); setScanError(null); }} style={{
+              flex: 1, height: 36, borderRadius: 8, border: 'none',
+              background: scanSubMode === 'barcode' ? '#fff' : 'transparent',
+              color: scanSubMode === 'barcode' ? '#374151' : '#6b7280',
+              fontSize: 13, fontWeight: scanSubMode === 'barcode' ? 600 : 400,
+              cursor: 'pointer', fontFamily: 'inherit',
+              boxShadow: scanSubMode === 'barcode' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+            }}>📦 Barcode</button>
+          </div>
+
           <div style={{
             border: '2px dashed #d1d5db', borderRadius: 16, padding: '32px 20px',
             textAlign: 'center', background: '#fafafa',
@@ -286,7 +364,54 @@ export default function ScanPage({ pantry, toast }) {
                   cursor: 'pointer', fontFamily: 'inherit',
                 }}>Try Again</button>
               </div>
-            ) : (
+            ) : scanError === 'no_barcode' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                <div style={{ fontSize: 14, color: '#b45309', lineHeight: 1.5 }}>
+                  ⚠️ No barcode detected.<br />
+                  Try better lighting or a clearer angle.
+                </div>
+                <button onClick={() => setScanError(null)} style={{
+                  height: 40, padding: '0 24px', borderRadius: 10, border: 'none',
+                  background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>Try Again</button>
+              </div>
+            ) : scanError === 'not_found' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                <div style={{ fontSize: 14, color: '#b45309', lineHeight: 1.5 }}>
+                  ⚠️ Product not found. You can add it manually below.
+                </div>
+                <input value={barcodeManualInput} onChange={e => setBarcodeManualInput(e.target.value)}
+                  placeholder="Enter product name"
+                  style={{
+                    width: '80%', height: 38, border: '1px solid #e5e7eb', borderRadius: 8,
+                    padding: '0 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none',
+                    textAlign: 'center',
+                  }} />
+                <button onClick={() => {
+                  if (!barcodeManualInput.trim()) return;
+                  setPreview([{ name: barcodeManualInput.trim(), quantity: 1, unit: 'item', checked: true }]);
+                  setDupeActions({});
+                  setScanError(null);
+                }} disabled={!barcodeManualInput.trim()} style={{
+                  height: 40, padding: '0 24px', borderRadius: 10, border: 'none',
+                  background: barcodeManualInput.trim() ? '#10b981' : '#d1d5db', color: '#fff',
+                  fontSize: 13, fontWeight: 600, cursor: barcodeManualInput.trim() ? 'pointer' : 'default',
+                  fontFamily: 'inherit',
+                }}>Add to Preview</button>
+              </div>
+            ) : scanError === 'scan_failed' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                <div style={{ fontSize: 14, color: '#b45309', lineHeight: 1.5 }}>
+                  ⚠️ Barcode scan failed. Please try again.
+                </div>
+                <button onClick={() => setScanError(null)} style={{
+                  height: 40, padding: '0 24px', borderRadius: 10, border: 'none',
+                  background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>Try Again</button>
+              </div>
+            ) : scanSubMode === 'photo' ? (
               <>
                 <div style={{ fontSize: 40, marginBottom: 8 }}>📸</div>
                 <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>Scan your ingredients</div>
@@ -306,6 +431,26 @@ export default function ScanPage({ pantry, toast }) {
                 </div>
                 <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Point at your fridge, pantry, or groceries</div>
               </>
+            ) : (
+              <>
+                <div style={{ fontSize: 40, marginBottom: 8 }}>📦</div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>Scan a product barcode</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+                  <label htmlFor="barcode-capture" style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
+                    background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}>📷 Scan Barcode</label>
+                  <label htmlFor="barcode-upload" style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    height: 40, padding: '0 20px', borderRadius: 10,
+                    border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
+                    fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
+                  }}>🖼️ Upload Barcode Image</label>
+                </div>
+                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Point camera at any grocery product barcode</div>
+              </>
             )}
           </div>
           <input id="camera-capture" type="file" accept="image/*" capture="environment"
@@ -314,6 +459,12 @@ export default function ScanPage({ pantry, toast }) {
           <input id="camera-upload" type="file" accept="image/*"
             style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
             onChange={e => handleImageUpload(e.target.files?.[0])} />
+          <input id="barcode-capture" type="file" accept="image/*" capture="environment"
+            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
+            onChange={e => handleBarcodeUpload(e.target.files?.[0])} />
+          <input id="barcode-upload" type="file" accept="image/*"
+            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
+            onChange={e => handleBarcodeUpload(e.target.files?.[0])} />
         </div>
       )}
 
@@ -374,7 +525,7 @@ export default function ScanPage({ pantry, toast }) {
         </div>
       )}
 
-      {/* Shared preview checklist — used by both scan and receipt modes */}
+      {/* Shared preview checklist — used by scan, receipt, and barcode modes */}
       {(mode === 'scan' || mode === 'receipt') && preview && previewChecklist}
     </div>
   );
