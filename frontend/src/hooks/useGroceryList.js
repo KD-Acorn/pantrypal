@@ -35,6 +35,19 @@ function saveLocal(items) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
 }
 
+function buildEntry(item) {
+  return {
+    id: item.id || genId(),
+    name: item.name || (typeof item === 'string' ? item : ''),
+    quantity: item.quantity || 1,
+    unit: item.unit || 'item',
+    category: item.category || assignCategory(item.name || (typeof item === 'string' ? item : '')),
+    checked: item.checked || false,
+    addedAt: item.addedAt || new Date().toISOString(),
+    source: item.source || 'manual',
+  };
+}
+
 export default function useGroceryList(uid) {
   const [items, setItems] = useState(() => uid ? [] : loadLocal());
   const itemsRef = useRef(items);
@@ -45,23 +58,23 @@ export default function useGroceryList(uid) {
       setItems(loadLocal());
       return;
     }
-    const unsub = onSnapshot(collection(db, 'grocery', uid, 'items'), (snap) => {
-      setItems(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+    console.log('[Grocery] Setting up Firestore listener for uid:', uid);
+    const unsub = onSnapshot(
+      collection(db, 'grocery', uid, 'items'),
+      (snap) => {
+        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        console.log('[Grocery] onSnapshot fired:', docs.length, 'items');
+        setItems(docs);
+      },
+      (err) => {
+        console.error('[Grocery] onSnapshot error:', err);
+      }
+    );
     return unsub;
   }, [uid]);
 
   const addItem = useCallback((item) => {
-    const entry = {
-      id: item.id || genId(),
-      name: item.name,
-      quantity: item.quantity || 1,
-      unit: item.unit || 'item',
-      category: item.category || assignCategory(item.name),
-      checked: false,
-      addedAt: new Date().toISOString(),
-      source: item.source || 'manual',
-    };
+    const entry = buildEntry(item);
     if (!uid) {
       setItems(prev => {
         const next = [...prev, entry];
@@ -69,7 +82,9 @@ export default function useGroceryList(uid) {
         return next;
       });
     } else {
-      setDoc(doc(db, 'grocery', uid, 'items', entry.id), entry);
+      setItems(prev => [...prev, entry]);
+      setDoc(doc(db, 'grocery', uid, 'items', entry.id), entry)
+        .catch(err => console.error('[Grocery] addItem write error:', err));
     }
   }, [uid]);
 
@@ -77,19 +92,10 @@ export default function useGroceryList(uid) {
     const existing = new Set(itemsRef.current.map(i => i.name.toLowerCase()));
     const toAdd = [];
     for (const item of newItems) {
-      const name = (item.name || item).trim();
+      const name = (item.name || (typeof item === 'string' ? item : '')).trim();
       if (!name || existing.has(name.toLowerCase())) continue;
       existing.add(name.toLowerCase());
-      toAdd.push({
-        id: genId(),
-        name,
-        quantity: item.quantity || 1,
-        unit: item.unit || 'item',
-        category: item.category || assignCategory(name),
-        checked: false,
-        addedAt: new Date().toISOString(),
-        source: item.source || 'manual',
-      });
+      toAdd.push(buildEntry({ ...item, name }));
     }
     if (toAdd.length === 0) return 0;
     if (!uid) {
@@ -99,8 +105,10 @@ export default function useGroceryList(uid) {
         return next;
       });
     } else {
+      setItems(prev => [...prev, ...toAdd]);
       for (const entry of toAdd) {
-        setDoc(doc(db, 'grocery', uid, 'items', entry.id), entry);
+        setDoc(doc(db, 'grocery', uid, 'items', entry.id), entry)
+          .catch(err => console.error('[Grocery] addItems write error:', err));
       }
     }
     return toAdd.length;
@@ -114,7 +122,9 @@ export default function useGroceryList(uid) {
         return next;
       });
     } else {
-      updateDoc(doc(db, 'grocery', uid, 'items', id), changes);
+      setItems(prev => prev.map(i => i.id === id ? { ...i, ...changes } : i));
+      updateDoc(doc(db, 'grocery', uid, 'items', id), changes)
+        .catch(err => console.error('[Grocery] updateItem write error:', err));
     }
   }, [uid]);
 
@@ -126,7 +136,9 @@ export default function useGroceryList(uid) {
         return next;
       });
     } else {
-      deleteDoc(doc(db, 'grocery', uid, 'items', id));
+      setItems(prev => prev.filter(i => i.id !== id));
+      deleteDoc(doc(db, 'grocery', uid, 'items', id))
+        .catch(err => console.error('[Grocery] removeItem write error:', err));
     }
   }, [uid]);
 
@@ -141,7 +153,9 @@ export default function useGroceryList(uid) {
         return updated;
       });
     } else {
-      updateDoc(doc(db, 'grocery', uid, 'items', id), { checked: next });
+      setItems(prev => prev.map(i => i.id === id ? { ...i, checked: next } : i));
+      updateDoc(doc(db, 'grocery', uid, 'items', id), { checked: next })
+        .catch(err => console.error('[Grocery] toggleChecked write error:', err));
     }
   }, [uid]);
 
@@ -154,9 +168,10 @@ export default function useGroceryList(uid) {
         return next;
       });
     } else {
+      setItems(prev => prev.filter(i => !i.checked));
       const batch = writeBatch(db);
       checked.forEach(i => batch.delete(doc(db, 'grocery', uid, 'items', i.id)));
-      batch.commit();
+      batch.commit().catch(err => console.error('[Grocery] clearChecked write error:', err));
     }
   }, [uid]);
 
@@ -165,9 +180,11 @@ export default function useGroceryList(uid) {
       saveLocal([]);
       setItems([]);
     } else {
+      const all = [...itemsRef.current];
+      setItems([]);
       const batch = writeBatch(db);
-      itemsRef.current.forEach(i => batch.delete(doc(db, 'grocery', uid, 'items', i.id)));
-      batch.commit();
+      all.forEach(i => batch.delete(doc(db, 'grocery', uid, 'items', i.id)));
+      batch.commit().catch(err => console.error('[Grocery] clearAll write error:', err));
     }
   }, [uid]);
 

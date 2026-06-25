@@ -67,8 +67,10 @@ export default function GroceryPage({ grocery, pantry, saved, toast }) {
 
   const grouped = useMemo(() => {
     const groups = {};
+    const knownCats = new Set(CATEGORY_ORDER);
     for (const item of grocery.items) {
-      const cat = item.category || '🛍 Other';
+      let cat = item.category || '🛍 Other';
+      if (!knownCats.has(cat)) cat = '🛍 Other';
       if (!groups[cat]) groups[cat] = [];
       groups[cat].push(item);
     }
