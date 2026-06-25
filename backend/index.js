@@ -66,12 +66,33 @@ app.post('/api/scan', async (req, res) => {
 
 // ── POST /api/recipes — Anthropic Claude ────────────────────────────────────
 app.post('/api/recipes', async (req, res) => {
-  const { ingredients, cuisineHint } = req.body;
+  const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights } = req.body;
   if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
 
   const cuisineClause = cuisineHint && cuisineHint !== 'Any'
     ? `Focus on ${cuisineHint} cuisine.`
     : '';
+
+  let dietaryClause = '';
+  if (dietaryFilters?.length) {
+    const labels = dietaryFilters.join(', ');
+    dietaryClause = `\nDIETARY RESTRICTIONS (MANDATORY):\nThese recipes MUST be ${labels}. Do not suggest any recipe that violates these dietary restrictions. Check every ingredient against these restrictions.`;
+  }
+
+  let timeClause = '';
+  if (cookTimeMax) {
+    timeClause = `\nTIME CONSTRAINT: Each recipe must take no more than ${cookTimeMax} minutes total cook time.`;
+  }
+
+  let difficultyClause = '';
+  if (difficulty && difficulty !== 'Any') {
+    difficultyClause = `\nDIFFICULTY CONSTRAINT: All recipes must be ${difficulty} difficulty.`;
+  }
+
+  let cuisineWeightClause = '';
+  if (cuisineWeights?.length && (!cuisineHint || cuisineHint === 'Any')) {
+    cuisineWeightClause = `\nCUISINE PREFERENCE: The user tends to prefer ${cuisineWeights.join(' and ')} cuisine — lean toward these styles if the ingredients allow, but still offer variety.`;
+  }
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -89,7 +110,7 @@ app.post('/api/recipes', async (req, res) => {
           content: `You are an experienced chef and culinary expert. A home cook has these ingredients available:
 ${ingredients.join(', ')}
 
-${cuisineClause}
+${cuisineClause}${dietaryClause}${timeClause}${difficultyClause}${cuisineWeightClause}
 
 Suggest 3 genuinely appealing, real recipes that a person would actually want to cook and eat.
 Follow these rules strictly:

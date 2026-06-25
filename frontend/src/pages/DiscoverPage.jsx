@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import Spinner from '../components/Spinner';
 import RecipeCard from '../components/RecipeCard';
 import MadeItSheet from '../components/MadeItSheet';
@@ -7,8 +7,20 @@ import CommunityFeed from './CommunityFeed';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const CUISINES = ['Any', 'Italian', 'Asian', 'Mexican', 'Quick & Easy', 'Mediterranean'];
+const COOK_TIMES = [
+  { key: 'any', label: 'Any' },
+  { key: '15', label: '<15min' },
+  { key: '30', label: '<30min' },
+  { key: '60', label: '<1hr' },
+];
+const DIFFICULTIES = ['Any', 'Easy', 'Medium', 'Hard'];
 
-export default function DiscoverPage({ pantry, toast, saved, cookHistory }) {
+const DIETARY_LABELS = {
+  vegetarian: '🌱 Vegetarian', vegan: '🌿 Vegan', 'gluten-free': '🌾 Gluten-Free',
+  'dairy-free': '🥛 Dairy-Free', 'nut-free': '🥜 Nut-Free', pescatarian: '🐟 Pescatarian',
+};
+
+export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings }) {
   const [discoverTab, setDiscoverTab] = useState('ai');
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -16,6 +28,29 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory }) {
   const [madeItRecipe, setMadeItRecipe] = useState(null);
   const [madeItPortions, setMadeItPortions] = useState(2);
   const [customizeRecipe, setCustomizeRecipe] = useState(null);
+
+  const [sessionDietaryOverrides, setSessionDietaryOverrides] = useState(null);
+  const [filterCuisine, setFilterCuisine] = useState('Any');
+  const [filterTime, setFilterTime] = useState('any');
+  const [filterDifficulty, setFilterDifficulty] = useState('Any');
+
+  const lastShuffleTime = useRef(Date.now());
+
+  const activeDietaryFilters = sessionDietaryOverrides !== null
+    ? sessionDietaryOverrides
+    : (settings?.dietaryPrefs || []);
+
+  function removeDietaryFilter(pref) {
+    if (sessionDietaryOverrides !== null) {
+      setSessionDietaryOverrides(prev => prev.filter(p => p !== pref));
+    } else {
+      setSessionDietaryOverrides((settings?.dietaryPrefs || []).filter(p => p !== pref));
+    }
+  }
+
+  function resetDietaryFilters() {
+    setSessionDietaryOverrides(null);
+  }
 
   async function fetchRecipes(idx) {
     if (pantry.items.length === 0) {
@@ -27,10 +62,26 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory }) {
       const formatted = pantry.items.map(i =>
         typeof i === 'string' ? i : `${i.quantity} ${i.unit} ${i.name}`
       );
+
+      const cuisineHint = filterCuisine !== 'Any' ? filterCuisine : CUISINES[idx];
+
+      const body = { ingredients: formatted, cuisineHint };
+
+      if (activeDietaryFilters.length > 0) body.dietaryFilters = activeDietaryFilters;
+      if (filterTime !== 'any') body.cookTimeMax = parseInt(filterTime, 10);
+      if (filterDifficulty !== 'Any') body.difficulty = filterDifficulty;
+
+      if (settings) {
+        const topCuisines = settings.getTopCuisines(2);
+        if (topCuisines.length > 0 && settings.getTotalShuffles() >= 3) {
+          body.cuisineWeights = topCuisines;
+        }
+      }
+
       const resp = await fetch(`${API}/api/recipes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ingredients: formatted, cuisineHint: CUISINES[idx] }),
+        body: JSON.stringify(body),
       });
       if (!resp.ok) throw new Error('Recipe fetch failed');
       const data = await resp.json();
@@ -44,7 +95,15 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory }) {
   }
 
   function handleFind() { fetchRecipes(cuisineIdx); }
+
   function handleShuffle() {
+    if (settings) {
+      const elapsed = Date.now() - lastShuffleTime.current;
+      if (elapsed > 3000) {
+        settings.recordCuisineView(CUISINES[cuisineIdx]);
+      }
+    }
+    lastShuffleTime.current = Date.now();
     const next = (cuisineIdx + 1) % CUISINES.length;
     setCuisineIdx(next);
     fetchRecipes(next);
@@ -58,6 +117,15 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory }) {
     transition: 'background 0.15s, color 0.15s',
   });
 
+  const pill = (label, active, onClick) => (
+    <button onClick={onClick} style={{
+      fontSize: 11, fontWeight: active ? 600 : 400, padding: '5px 12px', borderRadius: 20,
+      border: active ? 'none' : '1px solid #e5e7eb', cursor: 'pointer', fontFamily: 'inherit',
+      background: active ? '#10b981' : '#fff', color: active ? '#fff' : '#6b7280',
+      whiteSpace: 'nowrap', flexShrink: 0,
+    }}>{label}</button>
+  );
+
   return (
     <div style={{ padding: '20px 16px 100px' }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Discover Recipes</h1>
@@ -66,7 +134,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory }) {
         {discoverTab === 'ai' && recipes.length > 0 && ` · Showing ${CUISINES[cuisineIdx]} recipes`}
       </p>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20, background: '#f3f4f6', borderRadius: 12, padding: 4 }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: '#f3f4f6', borderRadius: 12, padding: 4 }}>
         <button onClick={() => setDiscoverTab('ai')} style={tabStyle(discoverTab === 'ai')}>
           🤖 AI Recipes
         </button>
@@ -77,6 +145,36 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory }) {
 
       {discoverTab === 'ai' && (
         <>
+          {/* Dietary filter pills */}
+          {activeDietaryFilters.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
+              {activeDietaryFilters.map(pref => (
+                <button key={pref} onClick={() => removeDietaryFilter(pref)} style={{
+                  fontSize: 11, fontWeight: 500, padding: '4px 10px', borderRadius: 20,
+                  background: '#ecfdf5', color: '#065f46', border: 'none',
+                  cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4,
+                }}>
+                  {DIETARY_LABELS[pref] || pref} <span style={{ fontSize: 13, lineHeight: 1 }}>×</span>
+                </button>
+              ))}
+              {sessionDietaryOverrides !== null && (
+                <button onClick={resetDietaryFilters} style={{
+                  fontSize: 11, color: '#10b981', background: 'none', border: 'none',
+                  cursor: 'pointer', fontFamily: 'inherit', marginLeft: 'auto',
+                }}>All Preferences</button>
+              )}
+            </div>
+          )}
+
+          {/* Quick filter bar */}
+          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2, marginBottom: 16 }}>
+            {CUISINES.map(c => pill(c, filterCuisine === c, () => setFilterCuisine(c)))}
+            <span style={{ width: 1, background: '#e5e7eb', flexShrink: 0 }} />
+            {COOK_TIMES.map(t => pill(t.label, filterTime === t.key, () => setFilterTime(t.key)))}
+            <span style={{ width: 1, background: '#e5e7eb', flexShrink: 0 }} />
+            {DIFFICULTIES.map(d => pill(d, filterDifficulty === d, () => setFilterDifficulty(d)))}
+          </div>
+
           <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
             <button onClick={handleFind} disabled={loading} style={{
               flex: 1, height: 44, borderRadius: 10, border: 'none',
