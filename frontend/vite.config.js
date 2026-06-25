@@ -5,6 +5,12 @@ export default defineConfig({
   plugins: [react()],
   preview: {
     port: 3004,
-    allowedHosts: ['pantry.doneitmobile.com']
+    allowedHosts: [
+      'pantry.doneitmobile.com',
+      'mypantryclub.com',
+      'www.mypantryclub.com',
+      'mypantryclub.app',
+      'www.mypantryclub.app'
+    ]
   }
 })
