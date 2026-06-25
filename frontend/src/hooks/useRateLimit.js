@@ -16,6 +16,7 @@ const LABELS = {
   substitution_suggest: 'Substitution Suggestions',
 };
 
+// Key kept as "pantrypal_*" for backward compatibility
 function todayKey() {
   return `pantrypal_usage_${new Date().toISOString().slice(0, 10)}`;
 }

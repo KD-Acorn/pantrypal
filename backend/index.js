@@ -1,3 +1,5 @@
+// My Pantry Club — API Proxy
+// DoneIt Technologies
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -430,4 +432,4 @@ Return ONLY a valid JSON array of 3 substitution objects. No markdown, no preamb
 });
 
 const PORT = process.env.PORT || 3003;
-app.listen(PORT, () => console.log(`PantryPal API listening on :${PORT}`));
+app.listen(PORT, () => console.log(`My Pantry Club API listening on :${PORT}`));

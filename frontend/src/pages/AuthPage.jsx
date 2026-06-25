@@ -107,8 +107,8 @@ export default function AuthPage() {
         boxShadow: '0 2px 16px rgba(0,0,0,0.06)', padding: '28px 24px',
       }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <div style={{ fontSize: 28, fontWeight: 800, color: '#111827' }}>PantryPal</div>
-          <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>Your smart kitchen companion</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: '#111827' }}>My Pantry Club</div>
+          <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>Your AI-powered kitchen companion</div>
         </div>
 
         <div style={{ display: 'flex', borderBottom: '1px solid #f0f0f0', marginBottom: 20 }}>

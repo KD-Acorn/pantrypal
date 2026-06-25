@@ -3,6 +3,7 @@ import SHOPPING_PARTNERS from '../config/shoppingPartners';
 import Spinner from './Spinner';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
+// Key kept as "pantrypal_*" for backward compatibility
 const CLICKS_KEY = 'pantrypal_affiliate_clicks';
 
 function formatAmount(n) {

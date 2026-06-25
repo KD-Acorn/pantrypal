@@ -1,6 +1,6 @@
-# PantryPal — Roadmap
+# My Pantry Club — Roadmap
 
-This document tracks every planned, in-progress, and completed feature for PantryPal across all phases.
+This document tracks every planned, in-progress, and completed feature for My Pantry Club across all phases.
 ---
 
 ## 🐛 Known Bugs
@@ -101,15 +101,25 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 - [x] Firestore sync for grocery list
 ---
 
-## 🔜 Phase 5 — Recipe Intelligence
+## ✅ Phase 5 — Recipe Intelligence + Monetization (Complete)
 
-- [ ] Dietary filter — vegetarian, vegan, gluten-free, dairy-free
-- [ ] Cuisine preference memory — learns what the user shuffles toward
-- [ ] Recipe difficulty filter
-- [ ] Cook time filter (under 30 min, under 1 hour, etc.)
-- [ ] "Use it before it expires" mode — prioritizes ingredients close to expiry
-- [ ] Meal planner — assign recipes to days of the week
-- [ ] Ingredient substitution suggestions ("out of X? try Y")
+- [x] Settings page with dietary preferences, shopping partners, cuisine prefs
+- [x] Dietary filters on Discover — default from settings, overridable per session
+- [x] Cuisine preference memory — learns from shuffle behavior
+- [x] Cook time + difficulty filters on Discover
+- [x] Use Before Expires mode — prioritizes expiring ingredients in recipe generation
+- [x] Meal planner — list view + calendar view, 7 days, 3 meal slots per day
+- [x] Recipe picker sheet — My Recipes + AI Suggest per meal type
+- [x] Grocery list integration from meal plan missing ingredients
+- [x] Affiliate links on missing ingredients — Amazon Fresh + Instacart
+- [x] Extensible shopping partner config (shoppingPartners.js)
+- [x] Affiliate click tracking to localStorage
+- [x] Ingredient substitution suggestions via Claude
+- [x] Sub? inline picker on missing ingredients in expanded view
+- [x] Past substitution hints in Made It sheet
+- [x] Freemium rate limiting — daily limits per feature
+- [x] Rate limit modal with Pro CTA
+- [x] Usage display in Settings
 
 ---
 

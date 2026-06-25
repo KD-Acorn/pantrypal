@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
+// Keys kept as "pantrypal_*" for backward compatibility
 const DIETARY_KEY = 'pantrypal_dietary_prefs';
 const PARTNERS_KEY = 'pantrypal_shopping_partners';
 const CUISINE_PREFS_KEY = 'pantrypal_cuisine_prefs';

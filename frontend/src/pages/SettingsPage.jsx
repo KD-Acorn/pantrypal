@@ -254,6 +254,19 @@ export default function SettingsPage({ onClose, settings, rateLimit }) {
               </button>
             </div>
           </div>
+          {/* About */}
+          {sectionTitle('About')}
+          <div style={{ padding: '10px 12px', background: '#f9fafb', borderRadius: 10 }}>
+            <div style={{ fontSize: 13, color: '#374151', marginBottom: 4 }}>My Pantry Club <span style={{ color: '#9ca3af' }}>v1.0.0</span></div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>© 2026 My Pantry Club — DoneIt Technologies</div>
+            <div style={{ fontSize: 11, color: '#9ca3af', lineHeight: 1.6, marginBottom: 12 }}>
+              My Pantry Club participates in affiliate programs. We may earn a small commission when you purchase through ingredient links, at no extra cost to you.
+            </div>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <a href="#" style={{ fontSize: 12, color: '#10b981' }}>Privacy Policy</a>
+              <a href="#" style={{ fontSize: 12, color: '#10b981' }}>Terms of Service</a>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 
+// Key kept as "pantrypal_*" for backward compatibility
 const STORAGE_KEY = 'pantrypal_meal_plan';
 const SLOTS = ['breakfast', 'lunch', 'dinner'];
 

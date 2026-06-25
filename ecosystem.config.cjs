@@ -1,3 +1,5 @@
+// App: My Pantry Club (formerly PantryPal)
+// PM2 process names kept as "pantrypal-*" to avoid re-registration
 const path = require('path');
 
 module.exports = {

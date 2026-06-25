@@ -34,7 +34,7 @@ function UserHeader({ onOpenSettings }) {
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       padding: '12px 16px', borderBottom: '1px solid #f0f0f0',
     }}>
-      <div style={{ fontSize: 18, fontWeight: 800, color: '#111827' }}>PantryPal</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: '#111827' }}>My Pantry Club</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 13, color: '#374151', fontWeight: 500 }}>{name}</span>
         <div style={{

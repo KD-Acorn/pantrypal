@@ -21,7 +21,7 @@ export default function RateLimitModal({ feature, limit, onClose }) {
           Your limit resets at midnight.
         </p>
         <p style={{ fontSize: 13, color: '#6b7280', lineHeight: 1.6, marginBottom: 20 }}>
-          Upgrade to <strong>PantryPal Pro</strong> for unlimited access.
+          Upgrade to <strong>My Pantry Club Pro</strong> for unlimited access.
         </p>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onClose} style={{

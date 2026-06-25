@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { collection, doc, setDoc, deleteDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 
+// Keys kept as "pantrypal_*" for backward compatibility
 const STORAGE_KEY = 'pantrypal_saved_recipes';
 const RATINGS_KEY = 'pantrypal_ratings';
 

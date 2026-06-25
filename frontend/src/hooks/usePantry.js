@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 
+// Key kept as "pantrypal_*" for backward compatibility
 const STORAGE_KEY = 'pantrypal_ingredients';
 
 let _idCounter = Date.now();

@@ -5,6 +5,7 @@ import RecipeCard from '../components/RecipeCard';
 import Spinner from '../components/Spinner';
 
 const PAGE_SIZE = 20;
+// Key kept as "pantrypal_*" for backward compatibility
 const COMMUNITY_RATINGS_KEY = 'pantrypal_community_ratings';
 
 function loadCommunityRatings() {
