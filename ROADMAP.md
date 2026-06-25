@@ -19,6 +19,22 @@ This document tracks every planned, in-progress, and completed feature for My Pa
 
 ---
 
+## 🎨 UI/QOL Review (Saturday Polish)
+
+- [ ] Bottom nav is overcrowded with 6 tabs — consolidate:
+      Move Grocery List into My Pantry page as a sub-tab
+      Move Meal Planner into My Recipes page as a sub-tab
+      Reduces bottom nav back to 4 tabs: Scan | My Pantry | My Recipes | Discover
+- [ ] Pantry categories — add category type sorting 
+      (Dairy, Meat, Produce, Grains, Spices, Condiments, Frozen, Snacks, Beverages, Other)
+- [ ] Screenshot walkthrough in README
+- [ ] Demo video
+- [ ] Fine tune recipe card UI on mobile
+- [ ] Review all toast messages for consistency
+- [ ] Empty state illustrations — add simple SVG illustrations to empty states
+- [ ] Loading skeleton screens instead of spinners
+
+---
 ## ✅ Phase 1 — Web MVP (Shipped)
 
 ### Pantry Manager
