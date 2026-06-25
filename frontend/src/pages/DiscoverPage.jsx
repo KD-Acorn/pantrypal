@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import Spinner from '../components/Spinner';
 import RecipeCard from '../components/RecipeCard';
 import RateLimitModal from '../components/RateLimitModal';
+import { trackEvent } from '../utils/analytics';
 import MadeItSheet from '../components/MadeItSheet';
 import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
 import CommunityFeed from './CommunityFeed';
@@ -104,7 +105,10 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
       if (!resp.ok) throw new Error('Recipe fetch failed');
       const data = await resp.json();
       setRecipes(data.recipes || []);
-      if (data.recipes?.length && rateLimit) rateLimit.increment('recipe_generate');
+      if (data.recipes?.length) {
+        if (rateLimit) rateLimit.increment('recipe_generate');
+        trackEvent('recipe_generate', { count: data.recipes.length, cuisine: cuisineHint });
+      }
       if (!data.recipes?.length) toast.show('No recipes found — try adding more ingredients', 'info');
     } catch {
       toast.show('Failed to load recipes — please try again', 'error');

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { collection, doc, setDoc, deleteDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
+import { trackEvent } from '../utils/analytics';
 
 // Keys kept as "pantrypal_*" for backward compatibility
 const STORAGE_KEY = 'pantrypal_saved_recipes';
@@ -69,6 +70,7 @@ export default function useSavedRecipes(uid) {
     } else {
       setDoc(doc(db, 'saved_recipes', uid, 'recipes', entry.id), entry);
     }
+    trackEvent('recipe_save', { title: recipe.title }, uid);
   }, [uid]);
 
   const unsave = useCallback((id) => {

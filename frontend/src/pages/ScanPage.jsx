@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Spinner from '../components/Spinner';
 import RateLimitModal from '../components/RateLimitModal';
+import { trackEvent } from '../utils/analytics';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch','pack'];
@@ -63,6 +64,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
       setPreview(items.map(name => ({ name, quantity: 1, unit: 'item', checked: true })));
       setDupeActions({});
       if (rateLimit) rateLimit.increment('scan_camera');
+      trackEvent('scan_complete', { type: 'camera', items: items.length });
     } catch {
       toast.show('Scan failed — try adding ingredients manually', 'error');
     } finally {
@@ -104,6 +106,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
       setDupeActions({});
       setStoreBanner(data.detectedStore || null);
       if (rateLimit) rateLimit.increment('scan_receipt');
+      trackEvent('scan_complete', { type: 'receipt', items: items.length });
     } catch {
       toast.show('Receipt scan failed — try better lighting or a flatter photo', 'error');
     } finally {
@@ -159,6 +162,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
       setDupeActions({});
       setBarcodeBanner({ productName: data.productName, brand: data.brand });
       if (rateLimit) rateLimit.increment('scan_barcode');
+      trackEvent('scan_complete', { type: 'barcode', items: items.length });
     } catch {
       toast.show('Barcode scan failed — please try again', 'error');
     } finally {

@@ -12,6 +12,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 // IMPORTANT: pantry.doneitmobile.com must be added to Firebase Console
 // Authentication → Settings → Authorized domains before Google sign-in works in production.
 import { auth, db } from '../firebase';
+import { trackEvent } from '../utils/analytics';
 
 const AuthContext = createContext(null);
 
@@ -50,6 +51,7 @@ export function AuthProvider({ children }) {
     await updateProfile(cred.user, { displayName });
     await ensureUserDoc({ ...cred.user, displayName });
     setCurrentUser({ ...cred.user, displayName });
+    trackEvent('user_signup', { method: 'email' }, cred.user.uid);
   }
 
   async function signIn(email, password) {

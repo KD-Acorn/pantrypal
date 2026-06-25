@@ -23,5 +23,14 @@ module.exports = {
         NODE_ENV: 'production',
       },
     },
+    {
+      name: 'mpc-admin',
+      script: 'npx',
+      args: 'vite preview --port 3005 --host',
+      cwd: path.resolve(__dirname, 'admin'),
+      env: {
+        NODE_ENV: 'production',
+      },
+    },
   ],
 };

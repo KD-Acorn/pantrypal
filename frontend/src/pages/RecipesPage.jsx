@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { doc, setDoc, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
+import { trackEvent } from '../utils/analytics';
 import RecipeCard from '../components/RecipeCard';
 import MadeItSheet from '../components/MadeItSheet';
 import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
@@ -85,6 +86,7 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
           sharedToPublic: true, publicRecipeId: publicId,
         });
         toast.show('Recipe shared with community', 'success');
+        trackEvent('recipe_share', { title: recipe.title }, uid);
       }
     } catch (err) {
       console.error('Share toggle error:', err);

@@ -19,7 +19,9 @@ import RecipesPage from './pages/RecipesPage';
 import GroceryPage from './pages/GroceryPage';
 import DiscoverPage from './pages/DiscoverPage';
 import AuthPage from './pages/AuthPage';
+import BugReportButton from './components/BugReportButton';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { trackEvent } from './utils/analytics';
 
 function UserHeader({ onOpenSettings }) {
   const { currentUser } = useAuth();
@@ -87,8 +89,9 @@ function AppContent() {
       {tab === 'grocery' && <GroceryPage grocery={grocery} pantry={pantry} saved={saved} toast={toast} />}
       {tab === 'mealplan' && <MealPlanPage mealPlan={mealPlan} saved={saved} pantry={pantry} grocery={grocery} toast={toast} />}
       {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} />}
+      <BugReportButton uid={uid} currentTab={tab} toast={toast} />
       <Toast toast={toast.toast} />
-      <BottomNav active={tab} onChange={setTab} />
+      <BottomNav active={tab} onChange={(t) => { setTab(t); trackEvent('page_view', { tab: t }, uid); }} />
       {showSettings && <SettingsPage onClose={() => setShowSettings(false)} settings={settings} rateLimit={rateLimit} />}
     </div>
   );
