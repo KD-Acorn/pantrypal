@@ -8,6 +8,9 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 - [x ] Photo upload on Scan page — clicking "Upload Photo" does nothing on some devices/browsers
       (camera capture works, text mode works, receipt mode affected too)
 
+- [ ] Grocery list items not displaying after being added — 
+      items save (Firestore confirmed) but UI does not render them
+
 ## 💬 Feedback & Reporting
 
 - [ ] "Report a Bug / Give Feedback" button on home screen or in nav
