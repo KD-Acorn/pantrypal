@@ -84,14 +84,18 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 
 ---
 
-## 🔜 Phase 4 — Smart Scanning
+## ✅ Phase 4 — Smart Scanning (Complete)
 
-- [x] Receipt scanner — upload grocery receipt, parse line items into pantry
-- [ ] Barcode scanner — scan product barcode, auto-identify ingredient
-- [ ] Expiry date tracking — add best-by dates to pantry items
-- [ ] Low stock alerts — flag items below a set quantity threshold
-- [ ] Grocery list generator — compile missing ingredients across saved recipes
-- [x] store abbreviation directory wiht learnin infrastructure
+- [x] Receipt scanner with store abbreviation directory
+- [x] Barcode scanner via GPT-4o + Open Food Facts
+- [x] Food Photo / Barcode toggle in Camera mode
+- [x] Expiry date tracking with Expiring Soon section
+- [x] Low stock alerts (expiry warnings at 7 days)
+- [x] Grocery list with category grouping
+- [x] Auto-populate from saved recipe missing ingredients
+- [x] Manual grocery list add
+- [x] Add checked items directly to pantry
+- [x] Firestore sync for grocery list
 ---
 
 ## 🔜 Phase 5 — Recipe Intelligence
