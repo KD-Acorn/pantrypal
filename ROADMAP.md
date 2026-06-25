@@ -130,6 +130,22 @@ This document tracks every planned, in-progress, and completed feature for Pantr
 
 ---
 
+## 🔜 Phase 8 — Admin Dashboard
+
+- [ ] Separate subdomain: admin.pantry.doneitmobile.com
+- [ ] New Cloudflare tunnel route + PM2 process
+- [ ] Admin-only Firebase auth (custom claims — owner UID only)
+- [ ] Analytics dashboard: DAU/MAU, session time, feature usage
+- [ ] User map — geographic distribution (city/country level, no PII)
+- [ ] Traffic sources — referrer tracking
+- [ ] Bug report inbox with built-in ticketing system
+  - [ ] Open / In Progress / Resolved status
+  - [ ] Wired to "Report a Bug" button in main app
+- [ ] Recipe analytics — most saved, most cooked, highest rated
+- [ ] User management — view accounts, disable if needed
+
+---
+
 ## 💡 Icebox (Considered, Not Scheduled)
 
 - [ ] Voice input — "add 2 cups of flour" via speech-to-text
