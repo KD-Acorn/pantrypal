@@ -182,6 +182,73 @@ This document tracks every planned, in-progress, and completed feature for My Pa
 
 ---
 
+## 🔜 Phase 8.5 — AI Learning & Community Intelligence
+
+### Scan Learning
+- [ ] Option A: Correction feedback loop
+      After any scan, user can tap an identified ingredient to correct it
+      Corrections logged to Firestore: scan_corrections/{uid}/entries
+      Admin panel shows most common corrections for review
+      
+- [ ] Option B: Community barcode dictionary
+      When barcode is scanned and user confirms the product name,
+      store in Firestore: verified_products/{barcode}
+      Next scan of same barcode skips GPT-4o, returns verified name instantly
+      Faster, free, and more accurate over time
+      Shows "Community Verified ✓" badge on barcode scan results
+      
+- [ ] Option C: Correction dataset export
+      Admin panel exports scan corrections as JSON dataset
+      Foundation for future fine-tuning a food-specific vision model
+      Long term: replace GPT-4o vision with self-hosted fine-tuned model
+
+### Substitution Intelligence  
+- [ ] AI learns from community substitution patterns
+      "87% of users substitute Greek yogurt for sour cream in this recipe"
+      Shown as community hints in MadeItSheet and recipe cards
+      
+- [ ] Recipe improvement suggestions based on cook history
+      "Users who made this recipe often add garlic — want to include it?"
+
+### Store Abbreviation Learning
+- [ ] UI for receipt scan corrections
+      After receipt scan, user can correct any misidentified item
+      Correction saved to storeAbbreviations.json via /api/store-abbreviations/add
+      Admin panel shows pending abbreviation suggestions for review
+
+## 🔜 Phase 8.6 — Enhanced Bug Reporting
+
+- [ ] Screenshot attachment in bug report
+      User can attach a screenshot or take a photo within the bug report sheet
+      Image uploaded to Firebase Storage (requires Blaze plan upgrade)
+      Or: convert to base64 and store directly in Firestore document
+      Admin bug report view shows attached screenshot inline
+
+- [ ] Automatic debug log with every bug report
+      When bug report is submitted, auto-capture:
+        - Current app version
+        - Browser and OS (parsed from userAgent)
+        - Current tab/page
+        - Last 10 analytics events from localStorage (user's recent actions)
+        - Any console errors captured via window.onerror listener
+        - Pantry item count, saved recipe count
+        - Firebase auth status
+        - Current rate limit usage
+        - Timestamp and domain
+      All sent as structured JSON alongside the bug description
+      Admin panel shows formatted debug info expandable on each report
+
+- [ ] Bug report status notifications
+      When admin updates a bug report status to "Resolved",
+      notify the user who submitted it (in-app notification or email)
+      
+- [ ] Duplicate bug detection
+      Before submitting, check if similar report exists (keyword match)
+      Show: "X other users reported this — we're already on it"
+      Lets user upvote existing report instead of creating duplicate
+
+---
+
 ## 💡 Icebox (Considered, Not Scheduled)
 
 - [ ] Voice input — "add 2 cups of flour" via speech-to-text
