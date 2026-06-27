@@ -266,6 +266,14 @@ export default function RecipeCard({
           </div>
         </div>
 
+        {/* Source badges */}
+        {recipe.source === 'ai' && (
+          <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 8px', borderRadius: 10, background: '#ede9fe', color: '#6d28d9', display: 'inline-block', marginTop: 4 }}>✨ AI</span>
+        )}
+        {recipe.source === 'sponsored' && recipe.sponsoredBy && (
+          <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 8px', borderRadius: 10, background: '#fffbeb', color: '#92400e', display: 'inline-block', marginTop: 4 }}>⭐ {recipe.sponsoredBy}</span>
+        )}
+
         <div style={{
           maxHeight: summaryVisible ? 2000 : 0,
           overflow: 'hidden',
@@ -394,6 +402,10 @@ export default function RecipeCard({
         transition: 'max-height 0.35s ease',
       }}>
         <div style={{ padding: '0 20px 20px', borderTop: '1px solid #f0f0f0' }}>
+          {recipe.thumbnail && (
+            <img src={recipe.thumbnail} alt={recipe.title}
+              style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 8, marginTop: 16 }} />
+          )}
           {scaledIngredients.length > 0 && (
             <div style={{ marginTop: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>

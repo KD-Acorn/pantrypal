@@ -66,47 +66,154 @@ app.post('/api/scan', async (req, res) => {
   }
 });
 
-// ── POST /api/recipes — Anthropic Claude ────────────────────────────────────
+// ── TheMealDB helpers ────────────────────────────────────────────────────────
+function extractIngredientNames(ingredients) {
+  return ingredients.map(i => {
+    const raw = typeof i === 'string' ? i : i.name || i;
+    return raw.replace(/^\d+\s*(item|box|can|bag|bottle|lb|oz|g|ml|cup|bunch|pack)\s+/i, '').trim().toLowerCase();
+  }).filter(Boolean);
+}
+
+function parseMealDBIngredients(meal) {
+  const out = [];
+  for (let i = 1; i <= 20; i++) {
+    const name = (meal[`strIngredient${i}`] || '').trim();
+    if (!name) break;
+    const measure = (meal[`strMeasure${i}`] || '').trim();
+    const amountMatch = measure.match(/^([\d.\/]+)/);
+    let amount = 1;
+    if (amountMatch) {
+      const raw = amountMatch[1];
+      amount = raw.includes('/') ? eval(raw) : parseFloat(raw) || 1;
+    }
+    const unit = measure.replace(/^[\d.\/]+\s*/, '').trim().toLowerCase() || 'whole';
+    out.push({ amount: Math.round(amount * 100) / 100, unit, name: name.toLowerCase() });
+  }
+  return out;
+}
+
+function calcMatchScore(recipeIngredients, pantryNames) {
+  if (recipeIngredients.length === 0) return 0;
+  const matches = recipeIngredients.filter(ri =>
+    pantryNames.some(p => p.includes(ri.name) || ri.name.includes(p))
+  );
+  return Math.round((matches.length / recipeIngredients.length) * 100);
+}
+
+function calcMissing(recipeIngredients, pantryNames) {
+  return recipeIngredients
+    .filter(ri => !pantryNames.some(p => p.includes(ri.name) || ri.name.includes(p)))
+    .map(ri => ri.name);
+}
+
+async function searchTheMealDB(pantryNames) {
+  const searchTerms = pantryNames.slice(0, 3);
+  const seenIds = new Set();
+  const mealIds = [];
+
+  for (const term of searchTerms) {
+    try {
+      const resp = await fetch(`https://www.themealdb.com/api/json/v1/1/filter.php?i=${encodeURIComponent(term)}`);
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      for (const meal of (data.meals || []).slice(0, 5)) {
+        if (!seenIds.has(meal.idMeal)) {
+          seenIds.add(meal.idMeal);
+          mealIds.push(meal.idMeal);
+        }
+      }
+    } catch {}
+  }
+
+  const recipes = [];
+  for (const id of mealIds.slice(0, 8)) {
+    try {
+      const resp = await fetch(`https://www.themealdb.com/api/json/v1/1/lookup.php?i=${id}`);
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const meal = data.meals?.[0];
+      if (!meal) continue;
+
+      const ingredients = parseMealDBIngredients(meal);
+      const matchScore = calcMatchScore(ingredients, pantryNames);
+      const missing = calcMissing(ingredients, pantryNames);
+      const instructions = (meal.strInstructions || '').split(/\r?\n/).filter(s => s.trim());
+      const desc = (meal.strInstructions || '').slice(0, 150).trim();
+
+      recipes.push({
+        title: meal.strMeal,
+        description: desc + (desc.length >= 150 ? '...' : ''),
+        cookTime: '30 min',
+        difficulty: 'Medium',
+        matchScore,
+        missingIngredients: missing,
+        cuisine: meal.strArea || meal.strCategory || '',
+        baseServings: 4,
+        ingredients,
+        steps: instructions,
+        source: 'themealdb',
+        sourceLabel: null,
+        mealDbId: meal.idMeal,
+        thumbnail: meal.strMealThumb || null,
+      });
+    } catch {}
+  }
+
+  return recipes;
+}
+
+// TODO: Add Spoonacular API call here when key is available
+// GET https://api.spoonacular.com/recipes/findByIngredients
+//   ?ingredients={ingredients}&number={needed}&apiKey={SPOONACULAR_API_KEY}
+function stubSpoonacular(_ingredients, _needed) {
+  return [];
+}
+
+// ── POST /api/recipes — Hybrid: TheMealDB + Spoonacular + Claude ────────────
 app.post('/api/recipes', async (req, res) => {
   const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights, expiringIngredients, mealTypeHint } = req.body;
   if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
 
-  const cuisineClause = cuisineHint && cuisineHint !== 'Any'
-    ? `Focus on ${cuisineHint} cuisine.`
-    : '';
-
-  let dietaryClause = '';
-  if (dietaryFilters?.length) {
-    const labels = dietaryFilters.join(', ');
-    dietaryClause = `\nDIETARY RESTRICTIONS (MANDATORY):\nThese recipes MUST be ${labels}. Do not suggest any recipe that violates these dietary restrictions. Check every ingredient against these restrictions.`;
-  }
-
-  let timeClause = '';
-  if (cookTimeMax) {
-    timeClause = `\nTIME CONSTRAINT: Each recipe must take no more than ${cookTimeMax} minutes total cook time.`;
-  }
-
-  let difficultyClause = '';
-  if (difficulty && difficulty !== 'Any') {
-    difficultyClause = `\nDIFFICULTY CONSTRAINT: All recipes must be ${difficulty} difficulty.`;
-  }
-
-  let cuisineWeightClause = '';
-  if (cuisineWeights?.length && (!cuisineHint || cuisineHint === 'Any')) {
-    cuisineWeightClause = `\nCUISINE PREFERENCE: The user tends to prefer ${cuisineWeights.join(' and ')} cuisine — lean toward these styles if the ingredients allow, but still offer variety.`;
-  }
-
-  let expiringClause = '';
-  if (expiringIngredients?.length) {
-    expiringClause = `\nPRIORITY — EXPIRING INGREDIENTS: The user has these ingredients expiring soon and needs to use them: ${expiringIngredients.join(', ')}. Prioritize recipes that use these ingredients. At least 2 of the 3 recipes MUST use one or more of the expiring ingredients.`;
-  }
-
-  let mealTypeClause = '';
-  if (mealTypeHint) {
-    mealTypeClause = `\nMEAL TYPE: Suggest recipes appropriate for: ${mealTypeHint}.`;
-  }
+  const pantryNames = extractIngredientNames(ingredients);
+  const TARGET = 5;
 
   try {
+    // Tier 1: TheMealDB (free, instant)
+    console.log('[Recipes] Searching TheMealDB for:', pantryNames.slice(0, 3).join(', '));
+    let dbRecipes = await searchTheMealDB(pantryNames);
+    dbRecipes = dbRecipes.filter(r => r.matchScore >= 30);
+    dbRecipes.sort((a, b) => b.matchScore - a.matchScore);
+    dbRecipes = dbRecipes.slice(0, 4);
+    console.log('[Recipes] TheMealDB returned:', dbRecipes.length, 'recipes');
+
+    // Tier 2: Spoonacular (stubbed)
+    const spoonRecipes = stubSpoonacular(pantryNames, TARGET - dbRecipes.length);
+
+    const catalogRecipes = [...dbRecipes, ...spoonRecipes];
+    const existingTitles = catalogRecipes.map(r => r.title);
+
+    // Tier 3: Claude Haiku for remaining slots
+    const needed = Math.max(1, TARGET - catalogRecipes.length);
+    console.log('[Recipes] Claude needs to fill:', needed, 'slots');
+
+    const cuisineClause = cuisineHint && cuisineHint !== 'Any' ? `Focus on ${cuisineHint} cuisine.` : '';
+    let dietaryClause = '';
+    if (dietaryFilters?.length) dietaryClause = `\nDIETARY RESTRICTIONS (MANDATORY): Recipes MUST be ${dietaryFilters.join(', ')}.`;
+    let timeClause = '';
+    if (cookTimeMax) timeClause = `\nTIME CONSTRAINT: Each recipe must take no more than ${cookTimeMax} minutes.`;
+    let difficultyClause = '';
+    if (difficulty && difficulty !== 'Any') difficultyClause = `\nDIFFICULTY: All recipes must be ${difficulty}.`;
+    let cuisineWeightClause = '';
+    if (cuisineWeights?.length && (!cuisineHint || cuisineHint === 'Any')) cuisineWeightClause = `\nCUISINE PREFERENCE: Lean toward ${cuisineWeights.join(' and ')}.`;
+    let expiringClause = '';
+    if (expiringIngredients?.length) expiringClause = `\nPRIORITY EXPIRING: Must use these: ${expiringIngredients.join(', ')}.`;
+    let mealTypeClause = '';
+    if (mealTypeHint) mealTypeClause = `\nMEAL TYPE: ${mealTypeHint}.`;
+
+    const excludeClause = existingTitles.length > 0
+      ? `\nDo NOT suggest any of these already found recipes: ${existingTitles.join(', ')}.`
+      : '';
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -115,71 +222,52 @@ app.post('/api/recipes', async (req, res) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 3000,
         messages: [{
           role: 'user',
-          content: `You are an experienced chef and culinary expert. A home cook has these ingredients available:
-${ingredients.join(', ')}
+          content: `You are an experienced chef. A home cook has: ${ingredients.join(', ')}
+${cuisineClause}${dietaryClause}${timeClause}${difficultyClause}${cuisineWeightClause}${expiringClause}${mealTypeClause}${excludeClause}
 
-${cuisineClause}${dietaryClause}${timeClause}${difficultyClause}${cuisineWeightClause}${expiringClause}${mealTypeClause}
-
-Suggest 3 genuinely appealing, real recipes that a person would actually want to cook and eat.
-Follow these rules strictly:
-
-RECIPE QUALITY RULES:
-- Suggest real, named dishes that people recognize (e.g. "Classic Carbonara", "Peanut Butter Banana Smoothie Bowl", "Spicy Tuna Fried Rice") — not generic combinations like "Egg and Potato Mix"
-- Think like a chef: if the user has most ingredients for a beloved classic dish, suggest it even if a few items are missing
-- Prioritize flavor cohesion — do not mix sweet dessert ingredients into savory mains
-- Consider cooking techniques that elevate simple ingredients (caramelizing, toasting, emulsifying)
-- Each recipe must be something a real restaurant or home cook would proudly serve
-- Vary the 3 suggestions: aim for different meal types (e.g. one light, one hearty, one creative)
-- If ingredients are limited or unusual, be creative but stay realistic and appetizing
-- Never suggest a recipe just because the ingredients technically combine — only suggest it if it tastes good
-
-MISSING INGREDIENTS:
-- It is completely fine to suggest a recipe where the user is missing several ingredients
-- Missing ingredients should be common pantry staples easy to buy (not exotic specialty items)
-- A 40% match score on a beloved classic is better than a 90% match on a bland combination
-
-FORMATTING RULES:
-- Return ONLY a valid JSON array of exactly 3 recipe objects
-- No markdown, no backticks, no preamble, no explanation outside the JSON
-- Each object must have exactly these fields:
-  {
-    "title": "Classic dish name",
-    "description": "1-2 sentences describing why this dish is delicious and appealing",
-    "cookTime": "25 min",
-    "difficulty": "Easy" | "Medium" | "Hard",
-    "matchScore": number 0-100,
-    "missingIngredients": ["item1", "item2"],
-    "cuisine": "Italian",
-    "baseServings": 2,
-    "ingredients": [
-      { "amount": 2, "unit": "cup", "name": "all-purpose flour" }
-    ],
-    "steps": [
-      "Step 1 instruction here",
-      "Step 2 instruction here"
-    ]
-  }
-- Use numeric amounts only (0.5 not "1/2")
-- Standard units: cup, tbsp, tsp, oz, g, ml, whole, pinch, clove, slice, lb, can, bag, bunch`,
+Suggest ${needed} genuinely appealing recipes. Real named dishes, not generic combos.
+Return ONLY a valid JSON array of exactly ${needed} recipe objects with these fields:
+{
+  "title": "Dish name",
+  "description": "1-2 sentences",
+  "cookTime": "25 min",
+  "difficulty": "Easy" | "Medium" | "Hard",
+  "matchScore": 0-100,
+  "missingIngredients": ["item1"],
+  "cuisine": "Italian",
+  "baseServings": 2,
+  "ingredients": [{ "amount": 2, "unit": "cup", "name": "flour" }],
+  "steps": ["Step 1", "Step 2"]
+}
+Use numeric amounts only. No markdown, no preamble.`,
         }],
       }),
     });
 
-    if (!response.ok) {
-      const err = await response.text();
-      console.error('Anthropic error:', err);
-      return res.status(502).json({ error: 'Failed to generate recipes' });
+    let aiRecipes = [];
+    if (response.ok) {
+      const data = await response.json();
+      const raw = data.content?.[0]?.text || '[]';
+      const cleaned = raw.replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      aiRecipes = (Array.isArray(parsed) ? parsed : []).map(r => ({
+        ...r,
+        source: 'ai',
+        sourceLabel: 'AI Generated',
+      }));
+    } else {
+      console.error('Anthropic error:', await response.text());
     }
 
-    const data = await response.json();
-    const raw = data.content?.[0]?.text || '[]';
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    const recipes = JSON.parse(cleaned);
-    res.json({ recipes: Array.isArray(recipes) ? recipes : [] });
+    const allRecipes = [...catalogRecipes, ...aiRecipes];
+    allRecipes.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+    console.log('[Recipes] Returning', allRecipes.length, 'total recipes');
+
+    res.json({ recipes: allRecipes.slice(0, TARGET) });
   } catch (err) {
     console.error('Recipe error:', err);
     res.status(500).json({ error: 'Recipe generation failed' });

@@ -112,10 +112,5 @@ See [ROADMAP.md](./ROADMAP.md) for the full feature roadmap.
 
 ## Author
 
-<<<<<<< HEAD
-Kennedy Durham — [GitHub](https://github.com/KD-Acorn)  
-Part of the [WorkRecord](https://workrecord.app) project portfolio.
-=======
 Kennedy Durham — [GitHub](https://github.com/KD-Acorn)
 Part of the DoneIt Technologies project portfolio.
->>>>>>> a00783d (rebrand: PantryPal → My Pantry Club, DoneIt Technologies attribution)
