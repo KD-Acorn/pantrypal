@@ -42,7 +42,7 @@ function pantryMatchesRecipe(recipe, pantryItems) {
   });
 }
 
-export default function CommunityFeed({ pantry, toast, saved, onSwitchToAI }) {
+export default function CommunityFeed({ pantry, toast, saved, grocery, onSwitchToAI }) {
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -218,6 +218,8 @@ export default function CommunityFeed({ pantry, toast, saved, onSwitchToAI }) {
             if (match) { saved.unsave(match.id); toast.show('Recipe removed', 'info'); }
           }}
           mode="community"
+          onAddToPantry={(name) => { pantry.add([{ name, quantity: 1, unit: 'item' }]); toast.show(`✓ ${name} added to pantry`, 'success'); }}
+          onAddToGrocery={(name) => { grocery?.addItem({ name, quantity: 1, unit: 'item', source: 'recipe_missing' }); toast.show(`🛒 ${name} added to grocery list`, 'success'); }}
         />
       ))}
 

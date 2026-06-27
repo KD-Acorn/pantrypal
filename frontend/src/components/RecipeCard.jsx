@@ -51,55 +51,66 @@ function MatchBadge({ score }) {
 }
 
 // ── Missing Ingredient Pill with shopping link ───────────────────────────────
-function MissingPill({ name, recipeTitle, enabledPartners, onOpenSettings }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
+function MissingPill({ name, recipeTitle, enabledPartners, onAddToPantry, onAddToGrocery }) {
+  const [open, setOpen] = useState(false);
 
   function handleClick(e) {
     e.stopPropagation();
-    if (enabledPartners.length === 1) {
-      const p = enabledPartners[0];
-      logAffiliateClick(p.id, name, recipeTitle);
-      window.open(buildShopUrl(p, name), '_blank', 'noopener');
-    } else if (enabledPartners.length > 1) {
-      setPickerOpen(v => !v);
-    }
+    e.preventDefault();
+    setOpen(v => !v);
   }
 
-  if (enabledPartners.length === 0) {
-    return (
-      <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 20, background: '#fef2f2', color: '#991b1b' }}>{name}</span>
-    );
-  }
+  const dropdownBtn = (label, onClick) => (
+    <button onClick={(e) => { e.stopPropagation(); onClick(); setOpen(false); }} style={{
+      fontSize: 12, padding: '8px 10px', borderRadius: 6, border: 'none',
+      background: '#f9fafb', color: '#374151', cursor: 'pointer',
+      fontFamily: 'inherit', textAlign: 'left', fontWeight: 500,
+      width: '100%', minHeight: 32,
+    }}>{label}</button>
+  );
 
   return (
     <span style={{ position: 'relative', display: 'inline-block' }}>
       <button onClick={handleClick} style={{
-        fontSize: 12, padding: '2px 8px', borderRadius: 20, background: '#fef2f2',
+        fontSize: 12, padding: '4px 10px', borderRadius: 20, background: '#fef2f2',
         color: '#991b1b', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-        display: 'inline-flex', alignItems: 'center', gap: 3,
-      }}>
-        {name} 🛒
+        display: 'inline-flex', alignItems: 'center', gap: 3, minHeight: 32,
+        transition: 'background 0.15s',
+      }}
+        onMouseEnter={e => e.currentTarget.style.background = '#fde8e8'}
+        onMouseLeave={e => e.currentTarget.style.background = '#fef2f2'}
+      >
+        {name} ▾
       </button>
-      {pickerOpen && (
-        <div style={{
-          position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 20,
-          background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.1)', padding: 6,
-          display: 'flex', flexDirection: 'column', gap: 4, minWidth: 160,
-        }}>
-          {enabledPartners.map(p => (
-            <button key={p.id} onClick={(e) => {
-              e.stopPropagation();
-              logAffiliateClick(p.id, name, recipeTitle);
-              window.open(buildShopUrl(p, name), '_blank', 'noopener');
-              setPickerOpen(false);
-            }} style={{
-              fontSize: 12, padding: '6px 10px', borderRadius: 6, border: 'none',
-              background: '#f9fafb', color: '#374151', cursor: 'pointer',
-              fontFamily: 'inherit', textAlign: 'left', fontWeight: 500,
-            }}>{p.icon} {p.name}</button>
-          ))}
-        </div>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
+          <div style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 20,
+            background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 6,
+            display: 'flex', flexDirection: 'column', gap: 3, minWidth: 180,
+          }}>
+            {onAddToPantry && dropdownBtn('+ Add to Pantry', () => onAddToPantry(name))}
+            {onAddToGrocery && dropdownBtn('🛒 Add to Grocery List', () => onAddToGrocery(name))}
+            {enabledPartners.length > 0 && (onAddToPantry || onAddToGrocery) && (
+              <div style={{ height: 1, background: '#f0f0f0', margin: '2px 0' }} />
+            )}
+            {enabledPartners.map(p => (
+              <button key={p.id} onClick={(e) => {
+                e.stopPropagation();
+                logAffiliateClick(p.id, name, recipeTitle);
+                window.open(buildShopUrl(p, name), '_blank', 'noopener');
+                setOpen(false);
+              }} style={{
+                fontSize: 12, padding: '8px 10px', borderRadius: 6, border: 'none',
+                background: '#f9fafb', color: '#374151', cursor: 'pointer',
+                fontFamily: 'inherit', textAlign: 'left', fontWeight: 500,
+                width: '100%', minHeight: 32,
+              }}>{p.icon} {p.name}</button>
+            ))}
+          </div>
+        </>
       )}
     </span>
   );
@@ -192,6 +203,8 @@ export default function RecipeCard({
   settings,
   rateLimit,
   cookHistory,
+  onAddToPantry,
+  onAddToGrocery,
 }) {
   const isCommunity = mode === 'community';
   const [showFull, setShowFull] = useState(false);
@@ -312,7 +325,7 @@ export default function RecipeCard({
               </div>
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                 {recipe.missingIngredients.map(m => (
-                  <MissingPill key={m} name={m} recipeTitle={recipe.title} enabledPartners={enabledPartners} />
+                  <MissingPill key={m} name={m} recipeTitle={recipe.title} enabledPartners={enabledPartners} onAddToPantry={onAddToPantry} onAddToGrocery={onAddToGrocery} />
                 ))}
               </div>
             </div>
@@ -440,7 +453,7 @@ export default function RecipeCard({
                         </span>
                         {inPantry && <span style={{ fontSize: 10, fontWeight: 500, color: '#059669', background: '#ecfdf5', padding: '1px 6px', borderRadius: 10 }}>✓ in pantry</span>}
                         {!inPantry && isMissing && enabledPartners.length > 0 && (
-                          <MissingPill name={ing.name} recipeTitle={recipe.title} enabledPartners={enabledPartners} />
+                          <MissingPill name={ing.name} recipeTitle={recipe.title} enabledPartners={enabledPartners} onAddToPantry={onAddToPantry} onAddToGrocery={onAddToGrocery} />
                         )}
                         {!inPantry && isMissing && enabledPartners.length === 0 && (
                           <span style={{ fontSize: 10, fontWeight: 500, color: '#9ca3af', background: '#f3f4f6', padding: '1px 6px', borderRadius: 10 }}>shopping list</span>

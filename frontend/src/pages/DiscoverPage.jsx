@@ -22,7 +22,7 @@ const DIETARY_LABELS = {
   'dairy-free': '🥛 Dairy-Free', 'nut-free': '🥜 Nut-Free', pescatarian: '🐟 Pescatarian',
 };
 
-export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings, rateLimit }) {
+export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings, rateLimit, grocery }) {
   const [discoverTab, setDiscoverTab] = useState('ai');
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -266,6 +266,8 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
                 settings={settings}
                 rateLimit={rateLimit ? { ...rateLimit, showLimitModal: (f) => setLimitModal({ feature: f, limit: 10 }) } : null}
                 cookHistory={cookHistory}
+                onAddToPantry={(name) => { pantry.add([{ name, quantity: 1, unit: 'item' }]); toast.show(`✓ ${name} added to pantry`, 'success'); }}
+                onAddToGrocery={(name) => { grocery?.addItem({ name, quantity: 1, unit: 'item', source: 'recipe_missing' }); toast.show(`🛒 ${name} added to grocery list`, 'success'); }}
               />
             ))}
           </div>
@@ -277,6 +279,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
           pantry={pantry}
           toast={toast}
           saved={saved}
+          grocery={grocery}
           onSwitchToAI={() => setDiscoverTab('ai')}
         />
       )}

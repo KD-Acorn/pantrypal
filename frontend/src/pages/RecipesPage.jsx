@@ -37,7 +37,7 @@ function formatDate(iso) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory }) {
+export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory, grocery, settings }) {
   const { currentUser } = useAuth();
   const uid = currentUser?.uid;
   const [expandedId, setExpandedId] = useState(null);
@@ -200,6 +200,9 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
                 onCustomize={(recipe) => setCustomizeRecipe(recipe)}
                 onShareToggle={handleShareToggle}
                 mode="saved"
+                settings={settings}
+                onAddToPantry={(name) => { pantry.add([{ name, quantity: 1, unit: 'item' }]); toast.show(`✓ ${name} added to pantry`, 'success'); }}
+                onAddToGrocery={(name) => { grocery?.addItem({ name, quantity: 1, unit: 'item', source: 'recipe_missing' }); toast.show(`🛒 ${name} added to grocery list`, 'success'); }}
               />
             ))}
           </div>

@@ -85,6 +85,34 @@ function extractIngredientNames(ingredients) {
   }).filter(Boolean);
 }
 
+const BASE_KEYWORDS = [
+  'chicken','beef','pork','fish','salmon','tuna','shrimp','turkey','lamb','bacon','sausage','egg',
+  'tomato','onion','garlic','potato','carrot','pepper','spinach','lettuce','mushroom','broccoli',
+  'lemon','lime','apple','banana','cucumber','zucchini','corn','pea','bean','cherry','berries',
+  'strawberry','blueberry','avocado','cabbage','celery','ginger','kale',
+  'milk','cheese','butter','cream','yogurt',
+  'rice','pasta','flour','bread','oat','noodle','tortilla',
+  'oil','vinegar','sauce','broth','stock','sugar','salt','honey','coconut','peanut butter',
+  'soy sauce','olive','almond','walnut','pecan',
+];
+const SKIP_KEYWORDS = [
+  'helper','instant','mix','powder','seasoning packet','flavor','kraft','hamburger helper',
+  'mac and cheese','ramen','popcorn','chips','crackers','cereal','granola bar','candy',
+  'chocolate covered','snack','cookie','pretzel','energy bar','protein bar',
+  'soda','energy drink','sports drink',
+];
+
+function pickSearchIngredients(pantryNames) {
+  const isBase = (name) => BASE_KEYWORDS.some(k => name.includes(k));
+  const isSkip = (name) => SKIP_KEYWORDS.some(k => name.includes(k));
+
+  const base = pantryNames.filter(n => isBase(n) && !isSkip(n));
+  if (base.length >= 3) return base.slice(0, 3);
+
+  const neutral = pantryNames.filter(n => !isSkip(n) && !base.includes(n));
+  return [...base, ...neutral].slice(0, 3);
+}
+
 function parseMealDBIngredients(meal) {
   const out = [];
   for (let i = 1; i <= 20; i++) {
@@ -103,17 +131,34 @@ function parseMealDBIngredients(meal) {
   return out;
 }
 
+const STRIP_DESCRIPTORS = /\b(fresh|dried|chopped|minced|ground|large|small|medium|boneless|skinless|whole|sliced|diced|raw|cooked|frozen|canned|organic)\b/gi;
+
+function normalizeIngName(name) {
+  let n = name.toLowerCase().replace(STRIP_DESCRIPTORS, '').replace(/\s+/g, ' ').trim();
+  if (n.endsWith('ies')) n = n.slice(0, -3) + 'y';
+  else if (n.endsWith('ves')) n = n.slice(0, -3) + 'f';
+  else if (n.endsWith('es') && !n.endsWith('cheese')) n = n.slice(0, -2);
+  else if (n.endsWith('s') && !n.endsWith('ss')) n = n.slice(0, -1);
+  return n;
+}
+
+function ingredientMatch(a, b) {
+  if (a.includes(b) || b.includes(a)) return true;
+  const na = normalizeIngName(a), nb = normalizeIngName(b);
+  return na.includes(nb) || nb.includes(na);
+}
+
 function calcMatchScore(recipeIngredients, pantryNames) {
-  if (recipeIngredients.length === 0) return 0;
-  const matches = recipeIngredients.filter(ri =>
-    pantryNames.some(p => p.includes(ri.name) || ri.name.includes(p))
+  if (recipeIngredients.length === 0) return { score: 0, matched: [] };
+  const matched = recipeIngredients.filter(ri =>
+    pantryNames.some(p => ingredientMatch(ri.name, p))
   );
-  return Math.round((matches.length / recipeIngredients.length) * 100);
+  return { score: Math.round((matched.length / recipeIngredients.length) * 100), matched: matched.map(m => m.name) };
 }
 
 function calcMissing(recipeIngredients, pantryNames) {
   return recipeIngredients
-    .filter(ri => !pantryNames.some(p => p.includes(ri.name) || ri.name.includes(p)))
+    .filter(ri => !pantryNames.some(p => ingredientMatch(ri.name, p)))
     .map(ri => ri.name);
 }
 
@@ -123,8 +168,7 @@ function fetchWithTimeout(url, ms = 5000) {
   return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timeout));
 }
 
-async function searchTheMealDB(pantryNames) {
-  const searchTerms = pantryNames.slice(0, 3);
+async function searchTheMealDB(searchTerms, pantryNames) {
 
   const filterResults = await Promise.all(
     searchTerms.map(term =>
@@ -159,10 +203,14 @@ async function searchTheMealDB(pantryNames) {
     if (!meal) continue;
 
     const ingredients = parseMealDBIngredients(meal);
-    const matchScore = calcMatchScore(ingredients, pantryNames);
+    const { score: matchScore, matched: matchedNames } = calcMatchScore(ingredients, pantryNames);
     const missing = calcMissing(ingredients, pantryNames);
     const instructions = (meal.strInstructions || '').split(/\r?\n/).filter(s => s.trim());
     const desc = (meal.strInstructions || '').slice(0, 150).trim();
+
+    if (recipes.length < 3) {
+      console.log('[Recipes] TheMealDB match:', meal.strMeal, 'score:', matchScore, 'matched:', matchedNames.join(', '));
+    }
 
     recipes.push({
       title: meal.strMeal,
@@ -185,9 +233,11 @@ async function searchTheMealDB(pantryNames) {
   return recipes;
 }
 
-// TODO: Add Spoonacular API call here when key is available
+// TODO: Pass filteredIngredients (base ingredients only) not raw pantryNames
+// Spoonacular handles branded products but returns better results with base ingredients
 // GET https://api.spoonacular.com/recipes/findByIngredients
-//   ?ingredients={ingredients}&number={needed}&apiKey={SPOONACULAR_API_KEY}
+//   ?ingredients={filteredIngredients.join(',')}&number={needed}&apiKey={SPOONACULAR_API_KEY}
+// Also update the function signature to accept filteredIngredients as parameter
 function stubSpoonacular(_ingredients, _needed) {
   return [];
 }
@@ -204,9 +254,10 @@ app.post('/api/recipes', async (req, res) => {
     // Tier 1: TheMealDB (free, instant)
     let dbRecipes = [];
     try {
-      console.log('[Recipes] Searching TheMealDB for:', pantryNames.slice(0, 3).join(', '));
-      dbRecipes = await searchTheMealDB(pantryNames);
-      dbRecipes = dbRecipes.filter(r => r.matchScore >= 30);
+      const searchTerms = pickSearchIngredients(pantryNames);
+      console.log('[Recipes] TheMealDB searching base ingredients:', searchTerms.join(', '));
+      dbRecipes = await searchTheMealDB(searchTerms, pantryNames);
+      dbRecipes = dbRecipes.filter(r => r.matchScore >= 20);
       dbRecipes.sort((a, b) => b.matchScore - a.matchScore);
     } catch (err) {
       console.error('[Recipes] TheMealDB failed, falling back to Claude only:', err.message);
