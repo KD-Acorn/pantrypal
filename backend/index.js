@@ -106,57 +106,69 @@ function calcMissing(recipeIngredients, pantryNames) {
     .map(ri => ri.name);
 }
 
+function fetchWithTimeout(url, ms = 5000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timeout));
+}
+
 async function searchTheMealDB(pantryNames) {
   const searchTerms = pantryNames.slice(0, 3);
+
+  const filterResults = await Promise.all(
+    searchTerms.map(term =>
+      fetchWithTimeout(`https://www.themealdb.com/api/json/v1/1/filter.php?i=${encodeURIComponent(term)}`)
+        .then(r => r.ok ? r.json() : { meals: null })
+        .catch(() => ({ meals: null }))
+    )
+  );
+
   const seenIds = new Set();
   const mealIds = [];
-
-  for (const term of searchTerms) {
-    try {
-      const resp = await fetch(`https://www.themealdb.com/api/json/v1/1/filter.php?i=${encodeURIComponent(term)}`);
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      for (const meal of (data.meals || []).slice(0, 5)) {
-        if (!seenIds.has(meal.idMeal)) {
-          seenIds.add(meal.idMeal);
-          mealIds.push(meal.idMeal);
-        }
+  for (const data of filterResults) {
+    for (const meal of (data.meals || []).slice(0, 5)) {
+      if (!seenIds.has(meal.idMeal)) {
+        seenIds.add(meal.idMeal);
+        mealIds.push(meal.idMeal);
       }
-    } catch {}
+    }
   }
 
+  const detailResults = await Promise.all(
+    mealIds.slice(0, 8).map(id =>
+      fetchWithTimeout(`https://www.themealdb.com/api/json/v1/1/lookup.php?i=${id}`)
+        .then(r => r.ok ? r.json() : { meals: null })
+        .catch(() => ({ meals: null }))
+    )
+  );
+
   const recipes = [];
-  for (const id of mealIds.slice(0, 8)) {
-    try {
-      const resp = await fetch(`https://www.themealdb.com/api/json/v1/1/lookup.php?i=${id}`);
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      const meal = data.meals?.[0];
-      if (!meal) continue;
+  for (const data of detailResults) {
+    const meal = data.meals?.[0];
+    if (!meal) continue;
 
-      const ingredients = parseMealDBIngredients(meal);
-      const matchScore = calcMatchScore(ingredients, pantryNames);
-      const missing = calcMissing(ingredients, pantryNames);
-      const instructions = (meal.strInstructions || '').split(/\r?\n/).filter(s => s.trim());
-      const desc = (meal.strInstructions || '').slice(0, 150).trim();
+    const ingredients = parseMealDBIngredients(meal);
+    const matchScore = calcMatchScore(ingredients, pantryNames);
+    const missing = calcMissing(ingredients, pantryNames);
+    const instructions = (meal.strInstructions || '').split(/\r?\n/).filter(s => s.trim());
+    const desc = (meal.strInstructions || '').slice(0, 150).trim();
 
-      recipes.push({
-        title: meal.strMeal,
-        description: desc + (desc.length >= 150 ? '...' : ''),
-        cookTime: '30 min',
-        difficulty: 'Medium',
-        matchScore,
-        missingIngredients: missing,
-        cuisine: meal.strArea || meal.strCategory || '',
-        baseServings: 4,
-        ingredients,
-        steps: instructions,
-        source: 'themealdb',
-        sourceLabel: null,
-        mealDbId: meal.idMeal,
-        thumbnail: meal.strMealThumb || null,
-      });
-    } catch {}
+    recipes.push({
+      title: meal.strMeal,
+      description: desc + (desc.length >= 150 ? '...' : ''),
+      cookTime: '30 min',
+      difficulty: 'Medium',
+      matchScore,
+      missingIngredients: missing,
+      cuisine: meal.strArea || meal.strCategory || '',
+      baseServings: 4,
+      ingredients,
+      steps: instructions,
+      source: 'themealdb',
+      sourceLabel: null,
+      mealDbId: meal.idMeal,
+      thumbnail: meal.strMealThumb || null,
+    });
   }
 
   return recipes;
@@ -179,10 +191,16 @@ app.post('/api/recipes', async (req, res) => {
 
   try {
     // Tier 1: TheMealDB (free, instant)
-    console.log('[Recipes] Searching TheMealDB for:', pantryNames.slice(0, 3).join(', '));
-    let dbRecipes = await searchTheMealDB(pantryNames);
-    dbRecipes = dbRecipes.filter(r => r.matchScore >= 30);
-    dbRecipes.sort((a, b) => b.matchScore - a.matchScore);
+    let dbRecipes = [];
+    try {
+      console.log('[Recipes] Searching TheMealDB for:', pantryNames.slice(0, 3).join(', '));
+      dbRecipes = await searchTheMealDB(pantryNames);
+      dbRecipes = dbRecipes.filter(r => r.matchScore >= 30);
+      dbRecipes.sort((a, b) => b.matchScore - a.matchScore);
+    } catch (err) {
+      console.error('[Recipes] TheMealDB failed, falling back to Claude only:', err.message);
+      dbRecipes = [];
+    }
     dbRecipes = dbRecipes.slice(0, 4);
     console.log('[Recipes] TheMealDB returned:', dbRecipes.length, 'recipes');
 
