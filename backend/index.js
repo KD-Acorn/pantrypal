@@ -233,13 +233,68 @@ async function searchTheMealDB(searchTerms, pantryNames) {
   return recipes;
 }
 
-// TODO: Pass filteredIngredients (base ingredients only) not raw pantryNames
-// Spoonacular handles branded products but returns better results with base ingredients
-// GET https://api.spoonacular.com/recipes/findByIngredients
-//   ?ingredients={filteredIngredients.join(',')}&number={needed}&apiKey={SPOONACULAR_API_KEY}
-// Also update the function signature to accept filteredIngredients as parameter
-function stubSpoonacular(_ingredients, _needed) {
-  return [];
+function stripHtml(str) {
+  return (str || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim();
+}
+
+async function searchSpoonacular(filteredIngredients, pantryNames, needed) {
+  const apiKey = process.env.SPOONACULAR_API_KEY;
+  if (!apiKey || needed <= 0) return [];
+
+  try {
+    const searchUrl = `https://api.spoonacular.com/recipes/findByIngredients?ingredients=${encodeURIComponent(filteredIngredients.join(','))}&number=${needed * 2}&ranking=1&ignorePantry=false&apiKey=${apiKey}`;
+    const searchResp = await fetchWithTimeout(searchUrl, 5000);
+    if (!searchResp.ok) { console.error('[Spoonacular] Search error:', searchResp.status); return []; }
+    const candidates = await searchResp.json();
+    if (!Array.isArray(candidates) || candidates.length === 0) return [];
+
+    const details = await Promise.all(
+      candidates.slice(0, needed * 2).map(c =>
+        fetchWithTimeout(`https://api.spoonacular.com/recipes/${c.id}/information?apiKey=${apiKey}`, 5000)
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null)
+      )
+    );
+
+    const recipes = [];
+    for (const recipe of details) {
+      if (!recipe) continue;
+      const ingredients = (recipe.extendedIngredients || []).map(i => ({
+        amount: Math.round((i.amount || 1) * 100) / 100,
+        unit: i.unit || 'whole',
+        name: (i.name || '').toLowerCase(),
+      }));
+      const { score: matchScore } = calcMatchScore(ingredients, pantryNames);
+      if (matchScore < 20) continue;
+      const missing = calcMissing(ingredients, pantryNames);
+      const mins = recipe.readyInMinutes || 30;
+      const steps = recipe.analyzedInstructions?.[0]?.steps?.map(s => s.step) || [];
+      const desc = stripHtml(recipe.summary || '').slice(0, 200);
+
+      recipes.push({
+        title: recipe.title,
+        description: desc + (desc.length >= 200 ? '...' : ''),
+        cookTime: `${mins} min`,
+        difficulty: mins <= 20 ? 'Easy' : mins <= 45 ? 'Medium' : 'Hard',
+        matchScore,
+        missingIngredients: missing,
+        cuisine: recipe.cuisines?.[0] || recipe.dishTypes?.[0] || 'International',
+        baseServings: recipe.servings || 4,
+        ingredients,
+        steps,
+        source: 'spoonacular',
+        sourceLabel: null,
+        thumbnail: recipe.image || null,
+        spoonacularId: recipe.id,
+      });
+    }
+
+    recipes.sort((a, b) => b.matchScore - a.matchScore);
+    return recipes;
+  } catch (err) {
+    console.error('[Spoonacular] Error:', err.message);
+    return [];
+  }
 }
 
 // ── POST /api/recipes — Hybrid: TheMealDB + Spoonacular + Claude ────────────
@@ -251,23 +306,28 @@ app.post('/api/recipes', async (req, res) => {
   const TARGET = 5;
 
   try {
-    // Tier 1: TheMealDB (free, instant)
-    let dbRecipes = [];
-    try {
-      const searchTerms = pickSearchIngredients(pantryNames);
-      console.log('[Recipes] TheMealDB searching base ingredients:', searchTerms.join(', '));
-      dbRecipes = await searchTheMealDB(searchTerms, pantryNames);
-      dbRecipes = dbRecipes.filter(r => r.matchScore >= 20);
-      dbRecipes.sort((a, b) => b.matchScore - a.matchScore);
-    } catch (err) {
-      console.error('[Recipes] TheMealDB failed, falling back to Claude only:', err.message);
-      dbRecipes = [];
-    }
-    dbRecipes = dbRecipes.slice(0, 4);
+    // Tier 1 + 2: TheMealDB and Spoonacular in parallel
+    const searchTerms = pickSearchIngredients(pantryNames);
+    console.log('[Recipes] Searching base ingredients:', searchTerms.join(', '));
+
+    const [dbRaw, spoonRaw] = await Promise.all([
+      searchTheMealDB(searchTerms, pantryNames).catch(err => {
+        console.error('[Recipes] TheMealDB failed:', err.message);
+        return [];
+      }),
+      searchSpoonacular(searchTerms, pantryNames, TARGET).catch(err => {
+        console.error('[Recipes] Spoonacular failed:', err.message);
+        return [];
+      }),
+    ]);
+
+    let dbRecipes = dbRaw.filter(r => r.matchScore >= 20).sort((a, b) => b.matchScore - a.matchScore).slice(0, 3);
     console.log('[Recipes] TheMealDB returned:', dbRecipes.length, 'recipes');
 
-    // Tier 2: Spoonacular (stubbed)
-    const spoonRecipes = stubSpoonacular(pantryNames, TARGET - dbRecipes.length);
+    const seenTitles = new Set(dbRecipes.map(r => r.title.toLowerCase()));
+    let spoonRecipes = spoonRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - dbRecipes.length);
+    spoonRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
+    console.log('[Recipes] Spoonacular returned:', spoonRecipes.length, 'recipes');
 
     const catalogRecipes = [...dbRecipes, ...spoonRecipes];
     const existingTitles = catalogRecipes.map(r => r.title);
