@@ -28,7 +28,11 @@ function saveLocal(items) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
 }
 
-export default function usePantry(uid) {
+export default function usePantry(uid, options) {
+  const onDepleted = options?.onDepleted;
+  const onDepletedRef = useRef(onDepleted);
+  onDepletedRef.current = onDepleted;
+
   const [items, setItems] = useState(() => uid ? [] : loadLocal());
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -43,6 +47,10 @@ export default function usePantry(uid) {
     });
     return unsub;
   }, [uid]);
+
+  function handleDepletion(item) {
+    if (onDepletedRef.current) onDepletedRef.current(item);
+  }
 
   const findByName = useCallback((name) => {
     return itemsRef.current.find(i => i.name.toLowerCase() === name.toLowerCase()) || null;
@@ -112,10 +120,26 @@ export default function usePantry(uid) {
     if (!uid) {
       setItems(prev => {
         const next = prev.map(i => i.id === id ? { ...i, ...changes } : i);
+        const updated = next.find(i => i.id === id);
+        if (updated && updated.quantity <= 0) {
+          handleDepletion(updated);
+          const filtered = next.filter(i => i.id !== id);
+          saveLocal(filtered);
+          return filtered;
+        }
         saveLocal(next);
         return next;
       });
     } else {
+      const current = itemsRef.current.find(i => i.id === id);
+      if (current) {
+        const newQty = changes.quantity ?? current.quantity;
+        if (newQty <= 0) {
+          handleDepletion(current);
+          deleteDoc(doc(db, 'pantry', uid, 'items', id));
+          return;
+        }
+      }
       updateDoc(doc(db, 'pantry', uid, 'items', id), changes);
     }
   }, [uid]);

@@ -58,11 +58,16 @@ function AppContent() {
   const uid = currentUser?.uid || null;
   const [tab, setTab] = useState('pantry');
   const [showSettings, setShowSettings] = useState(false);
-  const pantry = usePantry(uid);
   const toast = useToast();
+  const grocery = useGroceryList(uid);
+  const pantry = usePantry(uid, {
+    onDepleted: (item) => {
+      grocery.addItem({ name: item.name, quantity: 1, unit: item.unit, source: 'pantry_depleted' });
+      toast.show(`🛒 ${item.name} ran out — added to grocery list`, 'info');
+    },
+  });
   const saved = useSavedRecipes(uid);
   const cookHistory = useCookHistory(uid);
-  const grocery = useGroceryList(uid);
   const settings = useSettings(uid);
   const mealPlan = useMealPlan(uid);
   const rateLimit = useRateLimit();

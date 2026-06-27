@@ -89,12 +89,13 @@ export default function MadeItSheet({ recipe, portionSize, pantry, onClose, toas
       cookHistory.logSubstitution({ recipeTitle: recipe.title, ...subEntry });
     }
 
+    let depletedCount = 0;
     for (const [id, amount] of Object.entries(subtractions)) {
       const item = pantry.items.find(p => p.id === id);
       if (item) {
         const newQty = item.quantity - amount;
-        if (newQty < 0) belowZero = true;
-        pantry.update(id, { quantity: Math.max(0, newQty) });
+        if (newQty <= 0) depletedCount++;
+        pantry.update(id, { quantity: newQty });
       }
     }
 
@@ -108,8 +109,8 @@ export default function MadeItSheet({ recipe, portionSize, pantry, onClose, toas
       substitutions: cookSubs,
     });
 
-    if (belowZero) {
-      toast.show('Pantry updated! Some quantities were set to 0.', 'success');
+    if (depletedCount > 0) {
+      toast.show(`Pantry updated! ${depletedCount} item${depletedCount > 1 ? 's' : ''} ran out and ${depletedCount > 1 ? 'were' : 'was'} added to grocery list 🛒`, 'success');
     } else {
       toast.show('Pantry updated! Great cooking 👨‍🍳', 'success');
     }

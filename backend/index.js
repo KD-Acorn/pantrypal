@@ -13,7 +13,18 @@ dotenv.config({ path: resolve(__dirname, '..', '.env') });
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors({
-  origin: ['http://localhost:3004', 'https://pantry.doneitmobile.com'],
+  origin: [
+    'http://localhost:3004',
+    'http://localhost:3005',
+    'https://pantry.doneitmobile.com',
+    'https://mypantryclub.com',
+    'https://www.mypantryclub.com',
+    'https://mypantryclub.app',
+    'https://www.mypantryclub.app',
+    'https://admin.mypantryclub.com',
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
