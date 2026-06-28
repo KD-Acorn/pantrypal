@@ -297,6 +297,19 @@ async function searchSpoonacular(filteredIngredients, pantryNames, needed) {
   }
 }
 
+function validateRecipe(recipe) {
+  if (!recipe.ingredients?.length) return recipe;
+  const ingredientNames = recipe.ingredients.map(i => (i.name || '').toLowerCase().trim());
+  recipe.missingIngredients = (recipe.missingIngredients || []).filter(missing => {
+    const m = missing.toLowerCase().trim();
+    return ingredientNames.some(name => name.includes(m) || m.includes(name));
+  });
+  recipe.matchScore = Math.round(
+    ((recipe.ingredients.length - recipe.missingIngredients.length) / recipe.ingredients.length) * 100
+  );
+  return recipe;
+}
+
 // ── POST /api/recipes — Hybrid: TheMealDB + Spoonacular + Claude ────────────
 app.post('/api/recipes', async (req, res) => {
   const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights, expiringIngredients, mealTypeHint } = req.body;
@@ -383,7 +396,8 @@ Return ONLY a valid JSON array of exactly ${needed} recipe objects with these fi
   "ingredients": [{ "amount": 2, "unit": "cup", "name": "flour" }],
   "steps": ["Step 1", "Step 2"]
 }
-Use numeric amounts only. No markdown, no preamble.`,
+Use numeric amounts only. No markdown, no preamble.
+CRITICAL: missingIngredients must ONLY contain names that also appear in the ingredients array. It is a filtered subset of ingredients — nothing more.`,
         }],
       }),
     });
@@ -394,7 +408,7 @@ Use numeric amounts only. No markdown, no preamble.`,
       const raw = data.content?.[0]?.text || '[]';
       const cleaned = raw.replace(/```json|```/g, '').trim();
       const parsed = JSON.parse(cleaned);
-      aiRecipes = (Array.isArray(parsed) ? parsed : []).map(r => ({
+      aiRecipes = (Array.isArray(parsed) ? parsed : []).map(r => validateRecipe({
         ...r,
         source: 'ai',
         sourceLabel: 'AI Generated',
