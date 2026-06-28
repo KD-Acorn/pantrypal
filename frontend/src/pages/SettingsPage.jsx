@@ -17,7 +17,7 @@ const DIETARY_OPTIONS = [
 
 const CUISINE_OPTIONS = ['Italian', 'Asian', 'Mexican', 'Quick & Easy', 'Mediterranean', 'Any'];
 
-export default function SettingsPage({ onClose, settings, rateLimit, household, onReplayTour }) {
+export default function SettingsPage({ onClose, settings, rateLimit, household }) {
   const { currentUser, signOut } = useAuth();
   const [nameInput, setNameInput] = useState(settings.displayName || currentUser?.displayName || '');
   const [nameSaving, setNameSaving] = useState(false);
@@ -442,17 +442,9 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
             <div style={{ fontSize: 11, color: '#9ca3af', lineHeight: 1.6, marginBottom: 12 }}>
               My Pantry Club participates in affiliate programs. We may earn a small commission when you purchase through ingredient links, at no extra cost to you.
             </div>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 12 }}>
               <a href="#" style={{ fontSize: 12, color: '#10b981' }}>Privacy Policy</a>
               <a href="#" style={{ fontSize: 12, color: '#10b981' }}>Terms of Service</a>
-              {onReplayTour && (
-                <button onClick={() => {
-                  localStorage.removeItem('pantrypal_onboarding_done');
-                  onReplayTour();
-                }} style={{ fontSize: 12, color: '#10b981', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>
-                  🗺 Replay App Tour
-                </button>
-              )}
             </div>
           </div>
         </div>

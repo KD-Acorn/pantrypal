@@ -198,7 +198,7 @@ export default function PantryPage({ pantry, toast, household, householdPantry, 
             width: '100%', display: 'flex', alignItems: 'center', gap: 8,
             padding: '10px 0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
           }}>
-            <span data-tour="expiring-soon" style={{ fontSize: 15, fontWeight: 600, color: '#111827' }}>⚠️ Expiring Soon</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: '#111827' }}>⚠️ Expiring Soon</span>
             <span style={{ fontSize: 11, fontWeight: 600, background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: 20 }}>{expiringSoon.length}</span>
             <span style={{ marginLeft: 'auto', fontSize: 14, color: '#9ca3af' }}>{expiringExpanded ? '▴' : '▾'}</span>
           </button>
