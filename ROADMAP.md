@@ -139,18 +139,19 @@ This document tracks every planned, in-progress, and completed feature for My Pa
 
 ---
 
-## 🔜 Phase 6 — Households
+## ✅ Phase 6 — Households (Complete)
 
-- [ ] Create a household (name, invite members)
-- [ ] Household shared pantry (all members read/write)
-- [ ] Private pantry per member alongside shared pantry
-- [ ] 🔒 Private | 🏠 Household toggle on pantry items
-- [ ] Real-time sync — ingredient changes reflect for all members instantly
-- [ ] Shared recipe collection within household
-- [ ] Private recipes per member
-- [ ] Household member management (invite, remove)
-- [ ] Activity feed — "User B used the last 2 eggs"
-
+- [x] Create household with auto-generated 6-digit code
+- [x] Join household via code or email invite
+- [x] Real-time shared pantry across all members
+- [x] Activity feed — "Kennedy used the last 2 eggs"
+- [x] Shared recipe collection
+- [x] Shared meal plan
+- [x] Personal versions alongside shared (tab system)
+- [x] Owner + co-admin role management
+- [x] Sharing toggles per feature
+- [x] Household indicator in header
+- [x] Leave/disband household
 ---
 
 ## 🔜 Phase 7 — Mobile App (React Native)
