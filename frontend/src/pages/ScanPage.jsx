@@ -339,7 +339,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Scan Ingredients</h1>
       <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Add ingredients by typing, scanning, or uploading a receipt</p>
 
-      <div style={{ display: 'flex', borderBottom: '1px solid #f0f0f0', marginBottom: 20 }}>
+      <div data-tour="scan-modes" style={{ display: 'flex', borderBottom: '1px solid #f0f0f0', marginBottom: 20 }}>
         {tabBtn('text', 'Type / Paste')}
         {tabBtn('scan', 'Photo Scan')}
         {tabBtn('receipt', 'Receipt')}

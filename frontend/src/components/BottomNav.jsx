@@ -19,7 +19,7 @@ export default function BottomNav({ active, onChange }) {
       {TABS.map(t => {
         const sel = active === t.key;
         return (
-          <button key={t.key} onClick={() => onChange(t.key)} style={{
+          <button key={t.key} data-tour={`${t.key}-tab`} onClick={() => onChange(t.key)} style={{
             flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
             gap: 2, padding: '6px 0', background: 'none', border: 'none',
             cursor: 'pointer', color: sel ? '#10b981' : '#9ca3af',

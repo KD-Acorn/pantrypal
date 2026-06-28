@@ -161,7 +161,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
         <button onClick={() => setDiscoverTab('ai')} style={tabStyle(discoverTab === 'ai')}>
           🤖 AI Recipes
         </button>
-        <button onClick={() => setDiscoverTab('community')} style={tabStyle(discoverTab === 'community')}>
+        <button data-tour="community-tab" onClick={() => setDiscoverTab('community')} style={tabStyle(discoverTab === 'community')}>
           👥 Community
         </button>
       </div>
@@ -191,7 +191,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
 
           {/* Use Expiring toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <button onClick={() => setUseExpiring(v => !v)} style={{
+            <button data-tour="use-expiring" onClick={() => setUseExpiring(v => !v)} style={{
               fontSize: 12, fontWeight: 600, padding: '6px 14px', borderRadius: 20,
               border: useExpiring ? 'none' : '1px solid #fcd34d',
               background: useExpiring ? '#f59e0b' : '#fffbeb',
@@ -204,7 +204,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
           </div>
 
           {/* Quick filter bar */}
-          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2, marginBottom: 16 }}>
+          <div data-tour="cuisine-filters" style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2, marginBottom: 16 }}>
             {CUISINES.map(c => pill(c, filterCuisine === c, () => setFilterCuisine(c)))}
             <span style={{ width: 1, background: '#e5e7eb', flexShrink: 0 }} />
             {COOK_TIMES.map(t => pill(t.label, filterTime === t.key, () => setFilterTime(t.key)))}
@@ -213,7 +213,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-            <button onClick={handleFind} disabled={loading} style={{
+            <button data-tour="find-recipes" onClick={handleFind} disabled={loading} style={{
               flex: 1, height: 44, borderRadius: 10, border: 'none',
               background: loading ? '#d1d5db' : '#10b981', color: '#fff',
               fontSize: 15, fontWeight: 600, cursor: loading ? 'default' : 'pointer',
