@@ -4,5 +4,17 @@
     "detectedStore": "Food Lion",
     "rawItemCount": 4,
     "parsedItemCount": 4
+  },
+  {
+    "timestamp": "2026-06-28T15:05:25.125Z",
+    "detectedStore": null,
+    "rawItemCount": 0,
+    "parsedItemCount": 0
+  },
+  {
+    "timestamp": "2026-06-28T15:05:47.884Z",
+    "detectedStore": "BJ's Wholesale Club",
+    "rawItemCount": 2,
+    "parsedItemCount": 2
   }
 ]

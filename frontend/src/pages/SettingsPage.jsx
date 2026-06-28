@@ -5,6 +5,9 @@ import { db } from '../firebase';
 import SHOPPING_PARTNERS from '../config/shoppingPartners';
 import CreateHouseholdSheet from '../components/CreateHouseholdSheet';
 import JoinHouseholdSheet from '../components/JoinHouseholdSheet';
+import LegalPage from './LegalPage';
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 
 const DIETARY_OPTIONS = [
   { key: 'vegetarian', label: '🌱 Vegetarian' },
@@ -27,6 +30,11 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
   const [hhCodeCopied, setHhCodeCopied] = useState(false);
   const [confirmDisband, setConfirmDisband] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [deleteStep, setDeleteStep] = useState(0);
+  const [deleteInput, setDeleteInput] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteResult, setDeleteResult] = useState(null);
+  const [legalMode, setLegalMode] = useState(null);
 
   const name = currentUser?.displayName || currentUser?.email || 'User';
   const initial = (settings.displayName || name).charAt(0).toUpperCase();
@@ -128,6 +136,111 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
             background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500,
             cursor: 'pointer', fontFamily: 'inherit', marginTop: 12,
           }}>Sign Out</button>
+
+          {deleteStep === 0 && (
+            <div style={{ marginTop: 12, textAlign: 'center' }}>
+              <button onClick={() => setDeleteStep(1)} style={{
+                fontSize: 12, color: '#ef4444', background: 'none', border: 'none',
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}>Delete Account</button>
+            </div>
+          )}
+
+          {deleteStep === 1 && (
+            <div style={{
+              marginTop: 12, padding: 16, background: '#fef2f2', border: '1px solid #fecaca',
+              borderRadius: 12,
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#991b1b', marginBottom: 8 }}>Delete your account?</div>
+              <div style={{ fontSize: 13, color: '#7f1d1d', marginBottom: 8 }}>This will permanently delete:</div>
+              <ul style={{ fontSize: 12, color: '#991b1b', paddingLeft: 20, marginBottom: 8, lineHeight: 1.8 }}>
+                <li>Your pantry and ingredients</li>
+                <li>Your saved recipes</li>
+                <li>Your cook history and substitutions</li>
+                <li>Your grocery list and meal plan</li>
+                <li>Your login credentials</li>
+              </ul>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12, lineHeight: 1.6 }}>
+                Community recipes you've shared will remain but shown as "Community Member".
+                You have 7 days to cancel before deletion is permanent.
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setDeleteStep(0)} style={{
+                  flex: 1, height: 38, borderRadius: 8, border: '1px solid #e5e7eb',
+                  background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>Cancel</button>
+                <button onClick={() => setDeleteStep(2)} style={{
+                  flex: 1, height: 38, borderRadius: 8, border: 'none',
+                  background: '#ef4444', color: '#fff', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>Continue →</button>
+              </div>
+            </div>
+          )}
+
+          {deleteStep === 2 && !deleteResult && (
+            <div style={{
+              marginTop: 12, padding: 16, background: '#fef2f2', border: '1px solid #fecaca',
+              borderRadius: 12,
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#991b1b', marginBottom: 8 }}>Type DELETE to confirm</div>
+              <input value={deleteInput} onChange={e => setDeleteInput(e.target.value)}
+                placeholder="DELETE"
+                style={{
+                  width: '100%', height: 38, border: '1px solid #fecaca', borderRadius: 8,
+                  padding: '0 12px', fontSize: 14, fontFamily: 'inherit', outline: 'none',
+                  boxSizing: 'border-box', marginBottom: 12, textAlign: 'center',
+                  letterSpacing: 2,
+                }} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => { setDeleteStep(1); setDeleteInput(''); }} style={{
+                  flex: 1, height: 38, borderRadius: 8, border: '1px solid #e5e7eb',
+                  background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>Go Back</button>
+                <button
+                  disabled={deleteInput !== 'DELETE' || deleteLoading}
+                  onClick={async () => {
+                    setDeleteLoading(true);
+                    try {
+                      const token = await currentUser.getIdToken();
+                      const resp = await fetch(`${API}/api/delete-account`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                      });
+                      const data = await resp.json();
+                      if (data.success) {
+                        setDeleteResult(data.scheduledFor);
+                        setTimeout(() => { onClose(); signOut(); }, 3000);
+                      }
+                    } catch { /* ignore */ }
+                    setDeleteLoading(false);
+                  }}
+                  style={{
+                    flex: 1, height: 38, borderRadius: 8, border: 'none',
+                    background: deleteInput === 'DELETE' && !deleteLoading ? '#ef4444' : '#d1d5db',
+                    color: '#fff', fontSize: 13, fontWeight: 600,
+                    cursor: deleteInput === 'DELETE' && !deleteLoading ? 'pointer' : 'default',
+                    fontFamily: 'inherit',
+                  }}>{deleteLoading ? 'Deleting...' : 'Delete My Account'}</button>
+              </div>
+            </div>
+          )}
+
+          {deleteResult && (
+            <div style={{
+              marginTop: 12, padding: 16, background: '#f9fafb', border: '1px solid #e5e7eb',
+              borderRadius: 12, textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 14, color: '#374151', marginBottom: 4 }}>
+                Your account is scheduled for deletion on {new Date(deleteResult).toLocaleDateString()}.
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280' }}>
+                You can cancel by signing back in within 7 days.
+              </div>
+            </div>
+          )}
 
           {/* Dietary Preferences */}
           {sectionTitle('Dietary Preferences')}
@@ -467,12 +580,13 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
               My Pantry Club participates in affiliate programs. We may earn a small commission when you purchase through ingredient links, at no extra cost to you.
             </div>
             <div style={{ display: 'flex', gap: 12 }}>
-              <a href="#" style={{ fontSize: 12, color: '#10b981' }}>Privacy Policy</a>
-              <a href="#" style={{ fontSize: 12, color: '#10b981' }}>Terms of Service</a>
+              <button onClick={() => setLegalMode('privacy')} style={{ fontSize: 12, color: '#10b981', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>Privacy Policy</button>
+              <button onClick={() => setLegalMode('terms')} style={{ fontSize: 12, color: '#10b981', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>Terms of Service</button>
             </div>
           </div>
         </div>
       </div>
+      {legalMode && <LegalPage mode={legalMode} onClose={() => setLegalMode(null)} />}
     </div>
   );
 }

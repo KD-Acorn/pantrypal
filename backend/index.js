@@ -6,9 +6,16 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
+import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '..', '.env') });
+
+initializeApp({ projectId: 'pantrypal-ab665' });
+const adminDb = getFirestore();
+const adminAuth = getAdminAuth();
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -709,6 +716,77 @@ Return ONLY a valid JSON array of 3 substitution objects. No markdown, no preamb
   } catch (err) {
     console.error('Substitution error:', err);
     res.status(500).json({ error: 'Substitution suggestion failed' });
+  }
+});
+
+// ── POST /api/delete-account — Account deletion with 7-day grace period ──────
+app.post('/api/delete-account', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing auth token' });
+  }
+
+  try {
+    const token = authHeader.split('Bearer ')[1];
+    const decoded = await adminAuth.verifyIdToken(token);
+    const uid = decoded.uid;
+    const email = decoded.email || '';
+
+    const scheduledFor = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    // Handle household ownership
+    const householdsSnap = await adminDb.collection('households').where('createdBy', '==', uid).get();
+    for (const hDoc of householdsSnap.docs) {
+      const hData = hDoc.data();
+      const members = hData.members || [];
+      const coAdmins = members.filter(m => m.role === 'co-admin').sort((a, b) =>
+        (a.joinedAt?.toDate?.() || 0) - (b.joinedAt?.toDate?.() || 0)
+      );
+      if (coAdmins.length > 0) {
+        const newOwner = coAdmins[0];
+        const updatedMembers = members.map(m =>
+          m.uid === newOwner.uid ? { ...m, role: 'owner' } : m
+        ).filter(m => m.uid !== uid);
+        await hDoc.ref.update({ createdBy: newOwner.uid, members: updatedMembers });
+      } else {
+        await hDoc.ref.update({
+          disbanded: true,
+          disbandedAt: FieldValue.serverTimestamp(),
+          disbandedReason: 'owner_deleted_account',
+        });
+      }
+    }
+
+    // Remove from households where just a member
+    const allHouseholdsSnap = await adminDb.collection('households').get();
+    for (const hDoc of allHouseholdsSnap.docs) {
+      const members = hDoc.data().members || [];
+      if (members.some(m => m.uid === uid) && hDoc.data().createdBy !== uid) {
+        await hDoc.ref.update({
+          members: members.filter(m => m.uid !== uid),
+        });
+      }
+    }
+
+    // Anonymize public recipes
+    const publicSnap = await adminDb.collection('public_recipes').where('authorUid', '==', uid).get();
+    for (const pDoc of publicSnap.docs) {
+      await pDoc.ref.update({ authorName: 'Community Member', authorUid: 'deleted' });
+    }
+
+    // Create pending deletion record
+    await adminDb.collection('pending_deletions').doc(uid).set({
+      uid,
+      email,
+      requestedAt: FieldValue.serverTimestamp(),
+      scheduledFor: Timestamp.fromDate(scheduledFor),
+      status: 'pending',
+    });
+
+    res.json({ success: true, scheduledFor: scheduledFor.toISOString() });
+  } catch (err) {
+    console.error('Delete account error:', err);
+    res.status(500).json({ error: 'Account deletion failed' });
   }
 });
 

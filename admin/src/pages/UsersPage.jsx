@@ -18,14 +18,16 @@ function SkeletonRow() {
 }
 
 export default function UsersPage() {
+  const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState([]);
+  const [deletions, setDeletions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState('createdAt');
   const [sortDir, setSortDir] = useState('desc');
   const [page, setPage] = useState(0);
 
-  useEffect(() => { loadUsers(); }, []);
+  useEffect(() => { loadUsers(); loadDeletions(); }, []);
 
   async function loadUsers() {
     setLoading(true);
@@ -48,6 +50,24 @@ export default function UsersPage() {
       console.error('[Users] Load error:', err);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadDeletions() {
+    try {
+      const snap = await getDocs(collection(db, 'pending_deletions'));
+      setDeletions(snap.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          email: data.email || '',
+          requestedAt: data.requestedAt?.toDate?.() || new Date(0),
+          scheduledFor: data.scheduledFor?.toDate?.() || new Date(0),
+          status: data.status || 'pending',
+        };
+      }));
+    } catch (err) {
+      console.error('[Deletions] Load error:', err);
     }
   }
 
@@ -93,6 +113,62 @@ export default function UsersPage() {
         {loading ? 'Loading...' : `${users.length} registered user${users.length !== 1 ? 's' : ''}`}
       </p>
 
+      <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '1px solid #e5e7eb' }}>
+        {[
+          { key: 'users', label: 'All Users' },
+          { key: 'deletions', label: `Pending Deletions${deletions.length ? ` (${deletions.length})` : ''}` },
+        ].map(t => (
+          <button key={t.key} onClick={() => setActiveTab(t.key)} style={{
+            padding: '8px 16px', fontSize: 13, fontWeight: activeTab === t.key ? 600 : 400,
+            color: activeTab === t.key ? '#10b981' : '#6b7280',
+            background: 'none', border: 'none',
+            borderBottom: `2px solid ${activeTab === t.key ? '#10b981' : 'transparent'}`,
+            cursor: 'pointer', fontFamily: 'inherit',
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {activeTab === 'deletions' && (
+        <div style={{
+          background: '#fff', border: '1px solid #f0f0f0', borderRadius: 12,
+          overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', marginBottom: 24,
+        }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #f0f0f0' }}>
+                  <th style={{ padding: '8px 12px', fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', textAlign: 'left' }}>Email</th>
+                  <th style={{ padding: '8px 12px', fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', textAlign: 'left' }}>Requested</th>
+                  <th style={{ padding: '8px 12px', fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', textAlign: 'left' }}>Scheduled For</th>
+                  <th style={{ padding: '8px 12px', fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', textAlign: 'left' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deletions.length === 0 && (
+                  <tr><td colSpan={4} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>No pending deletions.</td></tr>
+                )}
+                {deletions.map(d => (
+                  <tr key={d.id} style={{ borderBottom: '1px solid #f9fafb' }}>
+                    <td style={{ padding: '10px 12px', color: '#374151' }}>{d.email || d.id}</td>
+                    <td style={{ padding: '10px 12px', color: '#6b7280' }}>{d.requestedAt instanceof Date && !isNaN(d.requestedAt) ? format(d.requestedAt, 'MMM d, yyyy HH:mm') : '—'}</td>
+                    <td style={{ padding: '10px 12px', color: '#6b7280' }}>{d.scheduledFor instanceof Date && !isNaN(d.scheduledFor) ? format(d.scheduledFor, 'MMM d, yyyy') : '—'}</td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+                        background: d.status === 'pending' ? '#fef3c7' : '#f3f4f6',
+                        color: d.status === 'pending' ? '#92400e' : '#6b7280',
+                      }}>{d.status}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'users' && (
+      <>
       <input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
         placeholder="Search by name or email..."
         style={{
@@ -161,6 +237,8 @@ export default function UsersPage() {
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }
