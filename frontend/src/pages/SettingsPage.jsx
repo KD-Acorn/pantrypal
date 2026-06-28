@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { doc, deleteDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import SHOPPING_PARTNERS from '../config/shoppingPartners';
+import CreateHouseholdSheet from '../components/CreateHouseholdSheet';
+import JoinHouseholdSheet from '../components/JoinHouseholdSheet';
 
 const DIETARY_OPTIONS = [
   { key: 'vegetarian', label: '🌱 Vegetarian' },
@@ -13,11 +17,16 @@ const DIETARY_OPTIONS = [
 
 const CUISINE_OPTIONS = ['Italian', 'Asian', 'Mexican', 'Quick & Easy', 'Mediterranean', 'Any'];
 
-export default function SettingsPage({ onClose, settings, rateLimit }) {
+export default function SettingsPage({ onClose, settings, rateLimit, household }) {
   const { currentUser, signOut } = useAuth();
   const [nameInput, setNameInput] = useState(settings.displayName || currentUser?.displayName || '');
   const [nameSaving, setNameSaving] = useState(false);
   const [partnersExpanded, setPartnersExpanded] = useState(false);
+  const [showCreateHH, setShowCreateHH] = useState(false);
+  const [showJoinHH, setShowJoinHH] = useState(false);
+  const [hhCodeCopied, setHhCodeCopied] = useState(false);
+  const [confirmDisband, setConfirmDisband] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
 
   const name = currentUser?.displayName || currentUser?.email || 'User';
   const initial = (settings.displayName || name).charAt(0).toUpperCase();
@@ -134,6 +143,177 @@ export default function SettingsPage({ onClose, settings, rateLimit }) {
               </div>
             ))}
           </div>
+
+          {/* Household */}
+          {household && (() => {
+            const hh = household.household;
+            const myRole = hh?.members?.find(m => m.uid === currentUser?.uid)?.role;
+            const isOwner = myRole === 'owner';
+            const isAdmin = isOwner || myRole === 'co-admin';
+            const displayName = settings.displayName || currentUser?.displayName || '';
+
+            return (
+              <>
+                {sectionTitle(hh ? `🏠 ${hh.name}` : '🏠 My Household')}
+                {!hh ? (
+                  <>
+                    {sectionLabel('Share your pantry and recipes with family or roommates')}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <button onClick={() => setShowCreateHH(true)} style={{
+                        width: '100%', height: 42, borderRadius: 10, border: 'none',
+                        background: '#10b981', color: '#fff', fontSize: 14, fontWeight: 600,
+                        cursor: 'pointer', fontFamily: 'inherit',
+                      }}>Create a Household</button>
+                      <button onClick={() => setShowJoinHH(true)} style={{
+                        width: '100%', height: 42, borderRadius: 10, border: '1px solid #e5e7eb',
+                        background: '#fff', color: '#374151', fontSize: 14, fontWeight: 500,
+                        cursor: 'pointer', fontFamily: 'inherit',
+                      }}>Join a Household</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Members */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+                      {hh.members?.map(m => (
+                        <div key={m.uid} style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '10px 12px', background: '#f9fafb', borderRadius: 10,
+                        }}>
+                          <div style={{
+                            width: 32, height: 32, borderRadius: '50%', background: '#10b981',
+                            color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 13, fontWeight: 700, flexShrink: 0,
+                          }}>{(m.displayName || '?')[0].toUpperCase()}</div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>{m.displayName || 'Member'}</div>
+                          </div>
+                          <span style={{
+                            fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+                            background: m.role === 'owner' ? '#fef3c7' : m.role === 'co-admin' ? '#ede9fe' : '#f3f4f6',
+                            color: m.role === 'owner' ? '#92400e' : m.role === 'co-admin' ? '#6d28d9' : '#6b7280',
+                          }}>{m.role}</span>
+                          {isAdmin && m.uid !== currentUser?.uid && m.role !== 'owner' && (
+                            <select value="" onChange={e => {
+                              const action = e.target.value;
+                              if (action === 'promote') household.promoteToCoadmin(hh.id, m.uid);
+                              if (action === 'demote') household.demoteToMember(hh.id, m.uid);
+                              if (action === 'remove') household.removeMember(hh.id, m.uid);
+                              e.target.value = '';
+                            }} style={{
+                              height: 28, border: '1px solid #e5e7eb', borderRadius: 6,
+                              fontSize: 11, fontFamily: 'inherit', background: '#fff', color: '#6b7280',
+                            }}>
+                              <option value="">···</option>
+                              {m.role === 'member' && <option value="promote">Promote</option>}
+                              {m.role === 'co-admin' && <option value="demote">Demote</option>}
+                              <option value="remove">Remove</option>
+                            </select>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Sharing toggles */}
+                    {isAdmin && (
+                      <>
+                        {sectionLabel('Shared features')}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                          {[
+                            { key: 'sharesPantry', label: '🥫 Share Pantry' },
+                            { key: 'sharesRecipes', label: '🍽 Share Recipes' },
+                            { key: 'sharesMealPlan', label: '📅 Share Meal Plan' },
+                          ].map(opt => (
+                            <div key={opt.key} style={{
+                              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                              padding: '10px 12px', background: '#f9fafb', borderRadius: 10,
+                            }}>
+                              <span style={{ fontSize: 14, color: '#374151' }}>{opt.label}</span>
+                              {toggle(hh.settings?.[opt.key], () => {
+                                household.updateSettings(hh.id, { ...hh.settings, [opt.key]: !hh.settings?.[opt.key] });
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    {/* Code */}
+                    <div style={{
+                      padding: '10px 12px', background: '#f0fdf4', borderRadius: 10, marginBottom: 16,
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: '#6b7280' }}>Household Code</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: '#10b981', letterSpacing: '0.1em' }}>
+                          {hh.code}
+                        </div>
+                      </div>
+                      <button onClick={() => {
+                        navigator.clipboard?.writeText(hh.code);
+                        setHhCodeCopied(true);
+                        setTimeout(() => setHhCodeCopied(false), 2000);
+                      }} style={{
+                        fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid #e5e7eb',
+                        background: '#fff', color: '#374151', cursor: 'pointer', fontFamily: 'inherit',
+                      }}>{hhCodeCopied ? '✓ Copied' : '📋 Copy'}</button>
+                    </div>
+                    <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 16 }}>Share this code so others can join</div>
+
+                    {/* Leave / Disband */}
+                    {isOwner ? (
+                      confirmDisband ? (
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                          <span style={{ fontSize: 12, color: '#6b7280', lineHeight: '34px' }}>Disband household?</span>
+                          <button onClick={async () => {
+                            await deleteDoc(doc(db, 'households', hh.id));
+                            setConfirmDisband(false);
+                          }} style={{
+                            fontSize: 12, fontWeight: 600, padding: '6px 14px', borderRadius: 6,
+                            background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                          }}>Yes, disband</button>
+                          <button onClick={() => setConfirmDisband(false)} style={{
+                            fontSize: 12, padding: '6px 14px', borderRadius: 6,
+                            background: '#f3f4f6', color: '#374151', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                          }}>Cancel</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setConfirmDisband(true)} style={{
+                          fontSize: 12, color: '#ef4444', background: 'none', border: 'none',
+                          cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+                        }}>Disband Household</button>
+                      )
+                    ) : (
+                      confirmLeave ? (
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                          <span style={{ fontSize: 12, color: '#6b7280', lineHeight: '34px' }}>Leave household?</span>
+                          <button onClick={async () => {
+                            await household.leaveHousehold(hh.id);
+                            setConfirmLeave(false);
+                          }} style={{
+                            fontSize: 12, fontWeight: 600, padding: '6px 14px', borderRadius: 6,
+                            background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                          }}>Yes, leave</button>
+                          <button onClick={() => setConfirmLeave(false)} style={{
+                            fontSize: 12, padding: '6px 14px', borderRadius: 6,
+                            background: '#f3f4f6', color: '#374151', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                          }}>Cancel</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setConfirmLeave(true)} style={{
+                          fontSize: 12, color: '#ef4444', background: 'none', border: 'none',
+                          cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+                        }}>Leave Household</button>
+                      )
+                    )}
+                  </>
+                )}
+
+                {showCreateHH && <CreateHouseholdSheet household={household} displayName={displayName} onClose={() => setShowCreateHH(false)} toast={null} />}
+                {showJoinHH && <JoinHouseholdSheet household={household} displayName={displayName} onClose={() => setShowJoinHH(false)} toast={null} />}
+              </>
+            );
+          })()}
 
           {/* Shopping Partners */}
           {sectionTitle('Shopping Partners')}

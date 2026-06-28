@@ -199,23 +199,36 @@ function RecipePicker({ onSelect, onClose, savedRecipes, pantryItems, toast, tar
 }
 
 // ── Main Page ────────────────────────────────────────────────────────────────
-export default function MealPlanPage({ mealPlan, saved, pantry, grocery, toast }) {
+export default function MealPlanPage({ mealPlan, saved, pantry, grocery, toast, household, householdMealPlan, householdRecipes, displayName }) {
+  const hh = household?.household;
+  const [planTab, setPlanTab] = useState('personal');
   const [view, setView] = useState('list');
   const [calDay, setCalDay] = useState(0);
   const [picker, setPicker] = useState(null);
 
-  const week = useMemo(() => mealPlan.getWeek(), [mealPlan.plan]);
+  const activePlan = planTab === 'household' && householdMealPlan ? householdMealPlan : mealPlan;
+  const week = useMemo(() => activePlan.getWeek(), [activePlan.plan]);
 
   function openPicker(date, slot) {
     setPicker({ date, slot });
   }
 
   function handleSelect(recipe) {
-    if (picker) mealPlan.assignMeal(picker.date, picker.slot, recipe);
+    if (!picker) return;
+    if (planTab === 'household' && householdMealPlan) {
+      householdMealPlan.assignMeal(picker.date, picker.slot, recipe, displayName);
+    } else {
+      mealPlan.assignMeal(picker.date, picker.slot, recipe);
+    }
+  }
+
+  function handleRemoveMeal(date, slot) {
+    if (planTab === 'household' && householdMealPlan) householdMealPlan.removeMeal(date, slot);
+    else mealPlan.removeMeal(date, slot);
   }
 
   function addMissingToGrocery() {
-    const missing = mealPlan.getWeekMissing();
+    const missing = activePlan.getWeekMissing();
     if (missing.length === 0) { toast.show('No missing ingredients this week', 'info'); return; }
     const added = grocery.addItems(missing.map(name => ({ name, quantity: 1, unit: 'item', source: 'meal_plan' })));
     if (added > 0) toast.show(`${added} ingredient${added > 1 ? 's' : ''} added to grocery list`, 'success');
@@ -233,10 +246,19 @@ export default function MealPlanPage({ mealPlan, saved, pantry, grocery, toast }
 
   return (
     <div style={{ padding: '20px 16px 100px' }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Meal Plan</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
+        {planTab === 'household' ? `${hh?.name || 'Household'} Meal Plan` : 'Meal Plan'}
+      </h1>
       <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
         {assignedCount} meal{assignedCount !== 1 ? 's' : ''} planned this week
       </p>
+
+      {hh && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, background: '#f3f4f6', borderRadius: 10, padding: 3 }}>
+          <button onClick={() => setPlanTab('personal')} style={tabStyle(planTab === 'personal')}>👤 My Plan</button>
+          <button onClick={() => setPlanTab('household')} style={tabStyle(planTab === 'household')}>🏠 Household</button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: '#f3f4f6', borderRadius: 10, padding: 3 }}>
         <button onClick={() => setView('list')} style={tabStyle(view === 'list')}>📋 List View</button>
@@ -266,7 +288,7 @@ export default function MealPlanPage({ mealPlan, saved, pantry, grocery, toast }
                     <MealSlot
                       meal={day[slot]}
                       onAdd={() => openPicker(day.date, slot)}
-                      onRemove={() => mealPlan.removeMeal(day.date, slot)}
+                      onRemove={() => handleRemoveMeal(day.date, slot)}
                     />
                   </div>
                 ))}
@@ -323,7 +345,7 @@ export default function MealPlanPage({ mealPlan, saved, pantry, grocery, toast }
                     <MealSlot
                       meal={week[calDay][slot]}
                       onAdd={() => openPicker(week[calDay].date, slot)}
-                      onRemove={() => mealPlan.removeMeal(week[calDay].date, slot)}
+                      onRemove={() => handleRemoveMeal(week[calDay].date, slot)}
                     />
                   </div>
                 ))}

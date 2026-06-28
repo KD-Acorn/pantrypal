@@ -5,6 +5,9 @@ import { trackEvent } from '../utils/analytics';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch','pack'];
+const IMG_ACCEPT = 'image/*,image/jpeg,image/png,image/heic,image/heif';
+const HIDDEN_INPUT = { position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0 };
+function tapLabel(id) { return (e) => { e.preventDefault(); document.getElementById(id)?.click(); }; }
 
 export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
   const [mode, setMode] = useState('text');
@@ -28,7 +31,13 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     setTextInput('');
   }
 
+  const [heicWarning, setHeicWarning] = useState(false);
+
+  // HEIC/HEIF: iOS native format — base64 read works but API may reject; warn user
   function fileToBase64(file) {
+    const isHeic = file.type === 'image/heic' || file.type === 'image/heif'
+      || file.name?.toLowerCase().endsWith('.heic') || file.name?.toLowerCase().endsWith('.heif');
+    setHeicWarning(isHeic);
     return new Promise((res, rej) => {
       const r = new FileReader();
       r.onload = () => res(r.result.split(',')[1]);
@@ -452,13 +461,13 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
                 <div style={{ fontSize: 40, marginBottom: 8 }}>📸</div>
                 <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>Scan your ingredients</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
-                  <label htmlFor="camera-capture" style={{
+                  <label htmlFor="camera-capture" onTouchEnd={tapLabel('camera-capture')} style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
                     background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
                     cursor: 'pointer', fontFamily: 'inherit',
                   }}>📷 Take a Photo</label>
-                  <label htmlFor="camera-upload" style={{
+                  <label htmlFor="camera-upload" onTouchEnd={tapLabel('camera-upload')} style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10,
                     border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
@@ -472,13 +481,13 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
                 <div style={{ fontSize: 40, marginBottom: 8 }}>📦</div>
                 <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>Scan a product barcode</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
-                  <label htmlFor="barcode-capture" style={{
+                  <label htmlFor="barcode-capture" onTouchEnd={tapLabel('barcode-capture')} style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
                     background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
                     cursor: 'pointer', fontFamily: 'inherit',
                   }}>📷 Scan Barcode</label>
-                  <label htmlFor="barcode-upload" style={{
+                  <label htmlFor="barcode-upload" onTouchEnd={tapLabel('barcode-upload')} style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10,
                     border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
@@ -489,18 +498,14 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
               </>
             )}
           </div>
-          <input id="camera-capture" type="file" accept="image/*" capture="environment"
-            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
-            onChange={e => handleImageUpload(e.target.files?.[0])} />
-          <input id="camera-upload" type="file" accept="image/*"
-            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
-            onChange={e => handleImageUpload(e.target.files?.[0])} />
-          <input id="barcode-capture" type="file" accept="image/*" capture="environment"
-            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
-            onChange={e => handleBarcodeUpload(e.target.files?.[0])} />
-          <input id="barcode-upload" type="file" accept="image/*"
-            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
-            onChange={e => handleBarcodeUpload(e.target.files?.[0])} />
+          <input id="camera-capture" type="file" accept={IMG_ACCEPT} capture="environment"
+            style={HIDDEN_INPUT} onChange={e => handleImageUpload(e.target.files?.[0])} />
+          <input id="camera-upload" type="file" accept={IMG_ACCEPT}
+            style={HIDDEN_INPUT} onChange={e => handleImageUpload(e.target.files?.[0])} />
+          <input id="barcode-capture" type="file" accept={IMG_ACCEPT} capture="environment"
+            style={HIDDEN_INPUT} onChange={e => handleBarcodeUpload(e.target.files?.[0])} />
+          <input id="barcode-upload" type="file" accept={IMG_ACCEPT}
+            style={HIDDEN_INPUT} onChange={e => handleBarcodeUpload(e.target.files?.[0])} />
         </div>
       )}
 
@@ -535,13 +540,13 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
                 <div style={{ fontSize: 40, marginBottom: 8 }}>🧾</div>
                 <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>Scan a grocery receipt</div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  <label htmlFor="receipt-capture" style={{
+                  <label htmlFor="receipt-capture" onTouchEnd={tapLabel('receipt-capture')} style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
                     background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
                     cursor: 'pointer', fontFamily: 'inherit',
                   }}>📷 Scan Receipt</label>
-                  <label htmlFor="receipt-upload" style={{
+                  <label htmlFor="receipt-upload" onTouchEnd={tapLabel('receipt-upload')} style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     height: 40, padding: '0 20px', borderRadius: 10,
                     border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
@@ -552,15 +557,21 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
               </>
             )}
           </div>
-          <input id="receipt-capture" type="file" accept="image/*" capture="environment"
-            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
-            onChange={e => handleReceiptUpload(e.target.files?.[0])} />
-          <input id="receipt-upload" type="file" accept="image/*"
-            style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, overflow: 'hidden', zIndex: -1 }}
-            onChange={e => handleReceiptUpload(e.target.files?.[0])} />
+          <input id="receipt-capture" type="file" accept={IMG_ACCEPT} capture="environment"
+            style={HIDDEN_INPUT} onChange={e => handleReceiptUpload(e.target.files?.[0])} />
+          <input id="receipt-upload" type="file" accept={IMG_ACCEPT}
+            style={HIDDEN_INPUT} onChange={e => handleReceiptUpload(e.target.files?.[0])} />
         </div>
       )}
 
+      {heicWarning && (
+        <div style={{
+          background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10,
+          padding: '8px 14px', marginBottom: 12, fontSize: 12, color: '#92400e', lineHeight: 1.5,
+        }}>
+          📱 For best results, switch your iPhone camera to JPEG format: Settings → Camera → Formats → Most Compatible
+        </div>
+      )}
       {/* Shared preview checklist — used by scan, receipt, and barcode modes */}
       {(mode === 'scan' || mode === 'receipt') && preview && previewChecklist}
       {limitModal && (

@@ -11,6 +11,10 @@ import useGroceryList from './hooks/useGroceryList';
 import useSettings from './hooks/useSettings';
 import useMealPlan from './hooks/useMealPlan';
 import useRateLimit from './hooks/useRateLimit';
+import useHousehold from './hooks/useHousehold';
+import useHouseholdPantry from './hooks/useHouseholdPantry';
+import useHouseholdRecipes from './hooks/useHouseholdRecipes';
+import useHouseholdMealPlan from './hooks/useHouseholdMealPlan';
 import ScanPage from './pages/ScanPage';
 import MealPlanPage from './pages/MealPlanPage';
 import SettingsPage from './pages/SettingsPage';
@@ -23,8 +27,9 @@ import BugReportButton from './components/BugReportButton';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { trackEvent } from './utils/analytics';
 
-function UserHeader({ onOpenSettings }) {
+function UserHeader({ onOpenSettings, householdName }) {
   const { currentUser } = useAuth();
+  const [showHHPop, setShowHHPop] = useState(false);
 
   if (!currentUser) return null;
 
@@ -38,6 +43,29 @@ function UserHeader({ onOpenSettings }) {
     }}>
       <img src="/images/small_logo-removebg-preview.png" alt="My Pantry Club" style={{ height: 36, width: 'auto' }} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {householdName && (
+          <div style={{ position: 'relative' }}>
+            <button onClick={() => setShowHHPop(v => !v)} style={{
+              background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, padding: 0, lineHeight: 1,
+            }}>🏠</button>
+            {showHHPop && (
+              <>
+                <div onClick={() => setShowHHPop(false)} style={{ position: 'fixed', inset: 0, zIndex: 49 }} />
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 50,
+                  background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 12,
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.1)', minWidth: 160,
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 4 }}>{householdName}</div>
+                  <button onClick={() => { setShowHHPop(false); onOpenSettings(); }} style={{
+                    fontSize: 12, color: '#10b981', background: 'none', border: 'none',
+                    cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+                  }}>Open Settings</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
         <span style={{ fontSize: 13, color: '#374151', fontWeight: 500 }}>{name}</span>
         <div style={{
           width: 32, height: 32, borderRadius: '50%', background: '#10b981',
@@ -71,6 +99,10 @@ function AppContent() {
   const settings = useSettings(uid);
   const mealPlan = useMealPlan(uid);
   const rateLimit = useRateLimit();
+  const household = useHousehold(uid);
+  const householdPantry = useHouseholdPantry(household.household?.id, household.logActivity);
+  const householdRecipes = useHouseholdRecipes(household.household?.id, household.logActivity);
+  const householdMealPlan = useHouseholdMealPlan(household.household?.id, household.logActivity);
 
   if (loading) {
     return (
@@ -86,18 +118,18 @@ function AppContent() {
 
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100dvh' }}>
-      <UserHeader onOpenSettings={() => setShowSettings(true)} />
+      <UserHeader onOpenSettings={() => setShowSettings(true)} householdName={household.household?.name} />
       <MigrationBanner uid={uid} toast={toast} />
       {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} grocery={grocery} rateLimit={rateLimit} />}
-      {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} />}
-      {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} />}
+      {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} household={household} householdPantry={householdPantry} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} />}
+      {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} household={household} householdRecipes={householdRecipes} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} />}
       {tab === 'grocery' && <GroceryPage grocery={grocery} pantry={pantry} saved={saved} toast={toast} />}
-      {tab === 'mealplan' && <MealPlanPage mealPlan={mealPlan} saved={saved} pantry={pantry} grocery={grocery} toast={toast} />}
+      {tab === 'mealplan' && <MealPlanPage mealPlan={mealPlan} saved={saved} pantry={pantry} grocery={grocery} toast={toast} household={household} householdMealPlan={householdMealPlan} householdRecipes={householdRecipes} displayName={settings.displayName || currentUser?.displayName || ''} />}
       {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} grocery={grocery} />}
       <BugReportButton uid={uid} currentTab={tab} toast={toast} />
       <Toast toast={toast.toast} />
       <BottomNav active={tab} onChange={(t) => { setTab(t); trackEvent('page_view', { tab: t }, uid); }} />
-      {showSettings && <SettingsPage onClose={() => setShowSettings(false)} settings={settings} rateLimit={rateLimit} />}
+      {showSettings && <SettingsPage onClose={() => setShowSettings(false)} settings={settings} rateLimit={rateLimit} household={household} />}
     </div>
   );
 }

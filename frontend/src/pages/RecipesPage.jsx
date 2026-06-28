@@ -37,9 +37,10 @@ function formatDate(iso) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory, grocery, settings }) {
+export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory, grocery, settings, household, householdRecipes, uid, displayName }) {
   const { currentUser } = useAuth();
-  const uid = currentUser?.uid;
+  const hh = household?.household;
+  const [recipesTab, setRecipesTab] = useState('personal');
   const [expandedId, setExpandedId] = useState(null);
   const [sort, setSort] = useState('date');
   const [cuisineFilter, setCuisineFilter] = useState('All');
@@ -135,10 +136,44 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
         )}
       </div>
       <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
-        Your saved recipe collection
+        {recipesTab === 'household' ? `${hh?.name || 'Household'} recipes` : 'Your saved recipe collection'}
       </p>
 
-      {saved.items.length === 0 ? (
+      {hh && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: '#f3f4f6', borderRadius: 10, padding: 3 }}>
+          <button onClick={() => setRecipesTab('personal')} style={{ flex: 1, height: 36, borderRadius: 8, border: 'none', background: recipesTab === 'personal' ? '#10b981' : 'transparent', color: recipesTab === 'personal' ? '#fff' : '#6b7280', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>👤 My Recipes</button>
+          <button onClick={() => setRecipesTab('household')} style={{ flex: 1, height: 36, borderRadius: 8, border: 'none', background: recipesTab === 'household' ? '#10b981' : 'transparent', color: recipesTab === 'household' ? '#fff' : '#6b7280', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>🏠 Household</button>
+        </div>
+      )}
+
+      {recipesTab === 'household' && hh && householdRecipes ? (
+        <div>
+          {householdRecipes.items.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>🏠</div>
+              <div style={{ fontSize: 14 }}>No household recipes yet. Save recipes from Discover to share with your household.</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {householdRecipes.items.map(r => (
+                <RecipeCard
+                  key={r.id}
+                  recipe={r}
+                  pantryItems={pantry.items}
+                  ratings={{}}
+                  onRate={(title, stars) => householdRecipes.updateRating(title, stars)}
+                  collapsed={expandedId !== r.id}
+                  onToggleCollapse={() => setExpandedId(prev => prev === r.id ? null : r.id)}
+                  isSaved={true}
+                  onUnsave={() => { householdRecipes.unsave(r.id); toast.show('Recipe removed from household', 'info'); }}
+                  mode="saved"
+                  settings={settings}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : saved.items.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
           <div style={{ fontSize: 36, marginBottom: 8 }}>📖</div>
           <div style={{ fontSize: 14, marginBottom: 16 }}>No saved recipes yet. Find recipes on the Discover tab and tap the bookmark to save them.</div>

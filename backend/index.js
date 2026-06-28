@@ -237,24 +237,42 @@ function stripHtml(str) {
   return (str || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim();
 }
 
+const spoonCache = new Map();
+const SPOON_CACHE_TTL = 60 * 60 * 1000;
+
 async function searchSpoonacular(filteredIngredients, pantryNames, needed) {
   const apiKey = process.env.SPOONACULAR_API_KEY;
   if (!apiKey || needed <= 0) return [];
 
+  const cacheKey = [...filteredIngredients].sort().join('|');
+  const cached = spoonCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < SPOON_CACHE_TTL) {
+    console.log('[Spoonacular] Cache hit');
+    return cached.recipes;
+  }
+
   try {
-    const searchUrl = `https://api.spoonacular.com/recipes/findByIngredients?ingredients=${encodeURIComponent(filteredIngredients.join(','))}&number=${needed * 2}&ranking=1&ignorePantry=false&apiKey=${apiKey}`;
+    const searchUrl = `https://api.spoonacular.com/recipes/findByIngredients?ingredients=${encodeURIComponent(filteredIngredients.join(','))}&number=${needed}&ranking=1&ignorePantry=false&apiKey=${apiKey}`;
     const searchResp = await fetchWithTimeout(searchUrl, 5000);
     if (!searchResp.ok) { console.error('[Spoonacular] Search error:', searchResp.status); return []; }
     const candidates = await searchResp.json();
     if (!Array.isArray(candidates) || candidates.length === 0) return [];
 
+    const worthy = candidates.filter(c => {
+      const used = c.usedIngredientCount || 0;
+      const missed = c.missedIngredientCount || 0;
+      return (used + missed) > 0 && (used / (used + missed)) * 100 >= 30;
+    });
+    if (worthy.length === 0) { console.log('[Spoonacular] No candidates passed quick score'); return []; }
+
     const details = await Promise.all(
-      candidates.slice(0, needed * 2).map(c =>
+      worthy.map(c =>
         fetchWithTimeout(`https://api.spoonacular.com/recipes/${c.id}/information?apiKey=${apiKey}`, 5000)
           .then(r => r.ok ? r.json() : null)
           .catch(() => null)
       )
     );
+    console.log('[Spoonacular] Est. points used:', worthy.length, 'detail lookups');
 
     const recipes = [];
     for (const recipe of details) {
@@ -290,6 +308,7 @@ async function searchSpoonacular(filteredIngredients, pantryNames, needed) {
     }
 
     recipes.sort((a, b) => b.matchScore - a.matchScore);
+    spoonCache.set(cacheKey, { recipes, cachedAt: Date.now() });
     return recipes;
   } catch (err) {
     console.error('[Spoonacular] Error:', err.message);
