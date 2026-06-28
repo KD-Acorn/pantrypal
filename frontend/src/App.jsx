@@ -5,6 +5,7 @@ import Spinner from './components/Spinner';
 import MigrationBanner from './components/MigrationBanner';
 import OnboardingFlow from './components/OnboardingFlow';
 import AppTour from './components/AppTour';
+import PendingDeletionScreen from './components/PendingDeletionScreen';
 import usePantry from './hooks/usePantry';
 import useToast from './hooks/useToast';
 import useSavedRecipes from './hooks/useSavedRecipes';
@@ -27,7 +28,7 @@ import DiscoverPage from './pages/DiscoverPage';
 import AuthPage from './pages/AuthPage';
 import BugReportButton from './components/BugReportButton';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { doc, getDoc, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import { trackEvent } from './utils/analytics';
 
@@ -92,8 +93,8 @@ function AppContent() {
   const [showSettings, setShowSettings] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showTour, setShowTour] = useState(false);
-  const [onboardingChecked, setOnboardingChecked] = useState(false);
-  const [pendingDeletion, setPendingDeletion] = useState(null);
+  const [showPendingDeletion, setShowPendingDeletion] = useState(false);
+  const [scheduledFor, setScheduledFor] = useState(null);
   const toast = useToast();
   const grocery = useGroceryList(uid);
   const pantry = usePantry(uid, {
@@ -119,24 +120,31 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (!uid) { setOnboardingChecked(true); return; }
-    getDoc(doc(db, 'pending_deletions', uid)).then(snap => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(doc(db, 'pending_deletions', currentUser.uid), (snap) => {
       if (snap.exists() && snap.data().status === 'pending') {
-        const scheduled = snap.data().scheduledFor?.toDate?.() || new Date(snap.data().scheduledFor);
-        setPendingDeletion(scheduled);
+        setScheduledFor(snap.data().scheduledFor);
+        setShowPendingDeletion(true);
+      } else {
+        setShowPendingDeletion(false);
       }
-    }).catch(() => {});
-    if (localStorage.getItem('pantrypal_onboarding_done') === 'true') {
-      setOnboardingChecked(true);
-      return;
-    }
-    getDoc(doc(db, 'users', uid)).then(snap => {
-      if (!snap.exists() || !snap.data().onboardingComplete) {
-        setShowOnboarding(true);
-      }
-      setOnboardingChecked(true);
-    }).catch(() => setOnboardingChecked(true));
-  }, [uid]);
+    });
+    return unsub;
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (localStorage.getItem('pantrypal_onboarding_done') === 'true') return;
+    const timer = setTimeout(async () => {
+      try {
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists() || userDoc.data().onboardingComplete !== true) {
+          setShowOnboarding(true);
+        }
+      } catch { /* ignore */ }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [currentUser]);
 
   if (loading) {
     return (
@@ -153,25 +161,6 @@ function AppContent() {
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100dvh' }}>
       <UserHeader onOpenSettings={() => setShowSettings(true)} householdName={household.household?.name} />
-      {pendingDeletion && (
-        <div style={{
-          padding: '10px 16px', background: '#fef2f2', borderBottom: '1px solid #fecaca',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-        }}>
-          <div style={{ fontSize: 12, color: '#991b1b' }}>
-            Account deletion scheduled for {pendingDeletion.toLocaleDateString()}
-          </div>
-          <button onClick={async () => {
-            await deleteDoc(doc(db, 'pending_deletions', uid));
-            setPendingDeletion(null);
-            toast.show('Account deletion cancelled. Welcome back!', 'success');
-          }} style={{
-            fontSize: 12, fontWeight: 600, padding: '4px 12px', borderRadius: 6,
-            background: '#fff', color: '#ef4444', border: '1px solid #fecaca',
-            cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
-          }}>Cancel Deletion</button>
-        </div>
-      )}
       <MigrationBanner uid={uid} toast={toast} />
       {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} grocery={grocery} rateLimit={rateLimit} />}
       {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} household={household} householdPantry={householdPantry} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} />}
@@ -208,6 +197,16 @@ function AppContent() {
           show={showTour}
           onComplete={() => setShowTour(false)}
           onSwitchTab={setTab}
+        />
+      )}
+      {showPendingDeletion && (
+        <PendingDeletionScreen
+          scheduledFor={scheduledFor}
+          currentUser={currentUser}
+          onCancelled={() => {
+            setShowPendingDeletion(false);
+            toast.show('Account deletion cancelled. Welcome back!', 'success');
+          }}
         />
       )}
     </div>

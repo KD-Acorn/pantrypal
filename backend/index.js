@@ -790,5 +790,92 @@ app.post('/api/delete-account', async (req, res) => {
   }
 });
 
+// ── POST /api/delete-account/cancel — Cancel pending deletion ─────────────────
+app.post('/api/delete-account/cancel', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
+
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+    await adminDb.collection('pending_deletions').doc(decoded.uid).delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Cancel deletion error:', err);
+    res.status(500).json({ error: 'Failed to cancel deletion' });
+  }
+});
+
+// ── POST /api/delete-account/now — Immediate full deletion ───────────────────
+async function deleteSubcollection(parentPath, subcollection) {
+  const snap = await adminDb.collection(`${parentPath}/${subcollection}`).get();
+  if (snap.empty) return;
+  const batch = adminDb.batch();
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+app.post('/api/delete-account/now', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
+
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+    const uid = decoded.uid;
+
+    await Promise.all([
+      deleteSubcollection(`pantry/${uid}`, 'items'),
+      deleteSubcollection(`saved_recipes/${uid}`, 'recipes'),
+      deleteSubcollection(`cook_history/${uid}`, 'entries'),
+      deleteSubcollection(`substitutions/${uid}`, 'entries'),
+      deleteSubcollection(`grocery/${uid}`, 'items'),
+      deleteSubcollection(`meal_plan/${uid}`, 'days'),
+    ]);
+
+    // Handle households
+    const ownedSnap = await adminDb.collection('households').where('createdBy', '==', uid).get();
+    for (const hDoc of ownedSnap.docs) {
+      const members = hDoc.data().members || [];
+      const coAdmins = members.filter(m => m.role === 'co-admin').sort((a, b) =>
+        (a.joinedAt?.toDate?.() || 0) - (b.joinedAt?.toDate?.() || 0)
+      );
+      if (coAdmins.length > 0) {
+        const newOwner = coAdmins[0];
+        await hDoc.ref.update({
+          createdBy: newOwner.uid,
+          members: members.map(m => m.uid === newOwner.uid ? { ...m, role: 'owner' } : m).filter(m => m.uid !== uid),
+        });
+      } else {
+        await hDoc.ref.update({ disbanded: true, disbandedAt: FieldValue.serverTimestamp(), disbandedReason: 'owner_deleted_account' });
+      }
+    }
+
+    const allHH = await adminDb.collection('households').get();
+    for (const hDoc of allHH.docs) {
+      const members = hDoc.data().members || [];
+      if (members.some(m => m.uid === uid) && hDoc.data().createdBy !== uid) {
+        await hDoc.ref.update({ members: members.filter(m => m.uid !== uid) });
+      }
+    }
+
+    // Anonymize public recipes
+    const publicSnap = await adminDb.collection('public_recipes').where('authorUid', '==', uid).get();
+    for (const pDoc of publicSnap.docs) {
+      await pDoc.ref.update({ authorName: 'Community Member', authorUid: 'deleted' });
+    }
+
+    // Delete user doc and pending deletion
+    await adminDb.collection('users').doc(uid).delete().catch(() => {});
+    await adminDb.collection('pending_deletions').doc(uid).delete().catch(() => {});
+
+    // Delete Firebase Auth user
+    await adminAuth.deleteUser(uid).catch(err => console.error('Auth delete error:', err));
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Immediate delete error:', err);
+    res.status(500).json({ error: 'Account deletion failed' });
+  }
+});
+
 const PORT = process.env.PORT || 3003;
 app.listen(PORT, () => console.log(`My Pantry Club API listening on :${PORT}`));

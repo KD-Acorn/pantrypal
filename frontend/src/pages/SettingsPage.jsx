@@ -152,17 +152,16 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
               borderRadius: 12,
             }}>
               <div style={{ fontSize: 15, fontWeight: 600, color: '#991b1b', marginBottom: 8 }}>Delete your account?</div>
-              <div style={{ fontSize: 13, color: '#7f1d1d', marginBottom: 8 }}>This will permanently delete:</div>
-              <ul style={{ fontSize: 12, color: '#991b1b', paddingLeft: 20, marginBottom: 8, lineHeight: 1.8 }}>
-                <li>Your pantry and ingredients</li>
-                <li>Your saved recipes</li>
-                <li>Your cook history and substitutions</li>
-                <li>Your grocery list and meal plan</li>
-                <li>Your login credentials</li>
+              <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, lineHeight: 1.6 }}>
+                You'll be taken to a deletion screen where you can:
+              </div>
+              <ul style={{ fontSize: 12, color: '#6b7280', paddingLeft: 20, marginBottom: 8, lineHeight: 1.8 }}>
+                <li>Wait 7 days (automatic deletion)</li>
+                <li>Delete immediately</li>
+                <li>Change your mind and keep your account</li>
               </ul>
               <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12, lineHeight: 1.6 }}>
                 Community recipes you've shared will remain but shown as "Community Member".
-                You have 7 days to cancel before deletion is permanent.
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button onClick={() => setDeleteStep(0)} style={{
@@ -212,7 +211,7 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
                       const data = await resp.json();
                       if (data.success) {
                         setDeleteResult(data.scheduledFor);
-                        setTimeout(() => { onClose(); signOut(); }, 3000);
+                        setTimeout(() => onClose(), 1500);
                       }
                     } catch { /* ignore */ }
                     setDeleteLoading(false);

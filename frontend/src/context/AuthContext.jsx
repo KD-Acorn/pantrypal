@@ -27,6 +27,7 @@ async function ensureUserDoc(user) {
       displayName: user.displayName || '',
       email: user.email || '',
       createdAt: serverTimestamp(),
+      onboardingComplete: false,
       pantryCount: 0,
       recipesCount: 0,
       cookCount: 0,
