@@ -10,14 +10,12 @@ export default function CreateHouseholdSheet({ household, displayName, onClose, 
     if (!name.trim()) return;
     setCreating(true);
     try {
-      await household.createHousehold(name.trim(), displayName);
-      setTimeout(() => {
-        const hh = household.household;
-        setCreatedCode(hh?.code || '------');
-        setCreating(false);
-      }, 1000);
+      const result = await household.createHousehold(name.trim(), displayName);
+      console.log('[Household] Created:', result);
+      setCreatedCode(result?.code || '------');
     } catch (err) {
       toast?.show('Failed to create household', 'error');
+    } finally {
       setCreating(false);
     }
   }
@@ -66,7 +64,7 @@ export default function CreateHouseholdSheet({ household, displayName, onClose, 
         ) : (
           <>
             <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 16 }}>Create a Household</div>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="The Durham Family"
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="My Family"
               onKeyDown={e => e.key === 'Enter' && handleCreate()}
               style={{
                 width: '100%', height: 44, border: '1px solid #e5e7eb', borderRadius: 10,

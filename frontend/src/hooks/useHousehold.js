@@ -56,7 +56,7 @@ export default function useHousehold(uid) {
     };
     await setDoc(doc(db, 'households', id), data);
     await logActivity(id, 'member_join', `${displayName || 'Owner'} created the household`, displayName);
-    return id;
+    return { id, code };
   }, [uid, logActivity]);
 
   const joinByCode = useCallback(async (code, displayName) => {
