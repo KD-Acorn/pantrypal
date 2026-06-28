@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { doc, deleteDoc } from 'firebase/firestore';
+import { doc, deleteDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import SHOPPING_PARTNERS from '../config/shoppingPartners';
 import CreateHouseholdSheet from '../components/CreateHouseholdSheet';
@@ -17,7 +17,7 @@ const DIETARY_OPTIONS = [
 
 const CUISINE_OPTIONS = ['Italian', 'Asian', 'Mexican', 'Quick & Easy', 'Mediterranean', 'Any'];
 
-export default function SettingsPage({ onClose, settings, rateLimit, household }) {
+export default function SettingsPage({ onClose, settings, rateLimit, household, onReplayTour, onRedoSetup }) {
   const { currentUser, signOut } = useAuth();
   const [nameInput, setNameInput] = useState(settings.displayName || currentUser?.displayName || '');
   const [nameSaving, setNameSaving] = useState(false);
@@ -439,6 +439,30 @@ export default function SettingsPage({ onClose, settings, rateLimit, household }
           <div style={{ padding: '10px 12px', background: '#f9fafb', borderRadius: 10 }}>
             <div style={{ fontSize: 13, color: '#374151', marginBottom: 4 }}>My Pantry Club <span style={{ color: '#9ca3af' }}>v1.0.0</span></div>
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>© 2026 My Pantry Club — DoneIt Technologies</div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+              {onReplayTour && (
+                <button onClick={onReplayTour} style={{
+                  width: '100%', height: 36, borderRadius: 8, border: '1px solid #e5e7eb',
+                  background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>🗺 Replay App Tour</button>
+              )}
+              {onRedoSetup && (
+                <button onClick={() => {
+                  if (currentUser?.uid) {
+                    setDoc(doc(db, 'users', currentUser.uid), { onboardingComplete: false }, { merge: true });
+                  }
+                  localStorage.removeItem('pantrypal_onboarding_done');
+                  onRedoSetup();
+                }} style={{
+                  width: '100%', height: 36, borderRadius: 8, border: '1px solid #e5e7eb',
+                  background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}>⚙️ Redo Setup</button>
+              )}
+            </div>
+
             <div style={{ fontSize: 11, color: '#9ca3af', lineHeight: 1.6, marginBottom: 12 }}>
               My Pantry Club participates in affiliate programs. We may earn a small commission when you purchase through ingredient links, at no extra cost to you.
             </div>

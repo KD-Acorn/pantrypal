@@ -370,7 +370,27 @@ app.post('/api/recipes', async (req, res) => {
 
     const cuisineClause = cuisineHint && cuisineHint !== 'Any' ? `Focus on ${cuisineHint} cuisine.` : '';
     let dietaryClause = '';
-    if (dietaryFilters?.length) dietaryClause = `\nDIETARY RESTRICTIONS (MANDATORY): Recipes MUST be ${dietaryFilters.join(', ')}.`;
+    if (dietaryFilters?.length) {
+      const RESTRICTION_DETAILS = {
+        'no-pork': 'Contains absolutely NO pork, ham, bacon, or pork products',
+        'no-beef': 'Contains absolutely NO beef, veal, or beef products',
+        'no-shellfish': 'Contains NO shellfish, shrimp, crab, lobster, or clams',
+        'halal': 'All ingredients must be Halal. No pork, no alcohol',
+        'kosher': 'All ingredients must be Kosher. No pork, no shellfish, no mixing of meat and dairy',
+        'no-alcohol': 'No wine, beer, spirits, or alcohol of any kind even for cooking',
+        'egg-free': 'Contains absolutely NO eggs or egg products',
+        'soy-free': 'Contains NO soy, tofu, edamame, or soy sauce',
+        'low-sodium': 'All recipes must be low sodium. No added salt, use herbs and spices instead',
+        'low-sugar': 'Low sugar, low glycemic index recipes only',
+        'keto': 'Strict keto: high fat, very low carb (under 20g net carbs)',
+        'paleo': 'Strict paleo: no grains, no dairy, no legumes, no processed foods',
+        'no-spicy': 'No chili, hot sauce, jalapeños, or spicy ingredients',
+        'no-raw-fish': 'No sushi, sashimi, ceviche, or any raw fish preparation',
+        'flexitarian': 'Mostly plant-based recipes, minimal meat',
+      };
+      const details = dietaryFilters.map(f => RESTRICTION_DETAILS[f] || f).join('. ');
+      dietaryClause = `\nDIETARY RESTRICTIONS (MANDATORY — NEVER VIOLATE): ${details}. Every single recipe must comply with ALL of these restrictions.`;
+    }
     let timeClause = '';
     if (cookTimeMax) timeClause = `\nTIME CONSTRAINT: Each recipe must take no more than ${cookTimeMax} minutes.`;
     let difficultyClause = '';

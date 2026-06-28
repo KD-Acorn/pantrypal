@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import BottomNav from './components/BottomNav';
 import Toast from './components/Toast';
 import Spinner from './components/Spinner';
 import MigrationBanner from './components/MigrationBanner';
+import OnboardingFlow from './components/OnboardingFlow';
+import AppTour from './components/AppTour';
 import usePantry from './hooks/usePantry';
 import useToast from './hooks/useToast';
 import useSavedRecipes from './hooks/useSavedRecipes';
@@ -25,6 +27,8 @@ import DiscoverPage from './pages/DiscoverPage';
 import AuthPage from './pages/AuthPage';
 import BugReportButton from './components/BugReportButton';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from './firebase';
 import { trackEvent } from './utils/analytics';
 
 function UserHeader({ onOpenSettings, householdName }) {
@@ -86,6 +90,9 @@ function AppContent() {
   const uid = currentUser?.uid || null;
   const [tab, setTab] = useState('pantry');
   const [showSettings, setShowSettings] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showTour, setShowTour] = useState(false);
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
   const toast = useToast();
   const grocery = useGroceryList(uid);
   const pantry = usePantry(uid, {
@@ -103,6 +110,26 @@ function AppContent() {
   const householdPantry = useHouseholdPantry(household.household?.id, household.logActivity);
   const householdRecipes = useHouseholdRecipes(household.household?.id, household.logActivity);
   const householdMealPlan = useHouseholdMealPlan(household.household?.id, household.logActivity);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    if (code) sessionStorage.setItem('pantrypal_join_code', code);
+  }, []);
+
+  useEffect(() => {
+    if (!uid) { setOnboardingChecked(true); return; }
+    if (localStorage.getItem('pantrypal_onboarding_done') === 'true') {
+      setOnboardingChecked(true);
+      return;
+    }
+    getDoc(doc(db, 'users', uid)).then(snap => {
+      if (!snap.exists() || !snap.data().onboardingComplete) {
+        setShowOnboarding(true);
+      }
+      setOnboardingChecked(true);
+    }).catch(() => setOnboardingChecked(true));
+  }, [uid]);
 
   if (loading) {
     return (
@@ -129,7 +156,34 @@ function AppContent() {
       <BugReportButton uid={uid} currentTab={tab} toast={toast} />
       <Toast toast={toast.toast} />
       <BottomNav active={tab} onChange={(t) => { setTab(t); trackEvent('page_view', { tab: t }, uid); }} />
-      {showSettings && <SettingsPage onClose={() => setShowSettings(false)} settings={settings} rateLimit={rateLimit} household={household} />}
+      {showSettings && (
+        <SettingsPage
+          onClose={() => setShowSettings(false)}
+          settings={settings}
+          rateLimit={rateLimit}
+          household={household}
+          onReplayTour={() => { setShowSettings(false); setShowTour(true); }}
+          onRedoSetup={() => { setShowSettings(false); setShowOnboarding(true); }}
+        />
+      )}
+      {showOnboarding && (
+        <OnboardingFlow
+          onComplete={(takeTour) => {
+            setShowOnboarding(false);
+            if (takeTour) setShowTour(true);
+          }}
+          currentUser={currentUser}
+          household={household}
+          settings={settings}
+        />
+      )}
+      {showTour && (
+        <AppTour
+          show={showTour}
+          onComplete={() => setShowTour(false)}
+          onSwitchTab={setTab}
+        />
+      )}
     </div>
   );
 }
