@@ -318,7 +318,7 @@ async function searchSpoonacular(filteredIngredients, pantryNames, needed) {
         steps,
         source: 'spoonacular',
         sourceLabel: null,
-        thumbnail: recipe.image || null,
+        thumbnail: (recipe.image || '').replace('312x231', '556x370') || null,
         spoonacularId: recipe.id,
       });
     }
@@ -345,39 +345,161 @@ function validateRecipe(recipe) {
   return recipe;
 }
 
+// ── Recipe Catalog helpers ──────────────────────────────────────────────────
+async function searchCatalog(ingredientNames, excludeIds, limit) {
+  if (!adminDb) return [];
+  const top5 = ingredientNames.filter(n => BASE_KEYWORDS.some(k => n.includes(k))).slice(0, 5);
+  if (top5.length === 0) return [];
+
+  try {
+    let query = adminDb.collection('recipe_catalog')
+      .where('indexedIngredients', 'array-contains-any', top5)
+      .limit(limit * 3);
+
+    const snap = await query.get();
+    const results = [];
+    for (const doc of snap.docs) {
+      if (excludeIds.includes(doc.id)) continue;
+      const data = doc.data();
+      const { score: matchScore } = calcMatchScore(
+        (data.ingredients || []).map(i => ({ name: i.name })),
+        ingredientNames
+      );
+      if (matchScore >= 20) {
+        const missing = calcMissing(
+          (data.ingredients || []).map(i => ({ name: i.name })),
+          ingredientNames
+        );
+        results.push({
+          title: data.title,
+          description: data.description || '',
+          cookTime: data.cookTime || '30 min',
+          difficulty: data.difficulty || 'Medium',
+          matchScore,
+          missingIngredients: missing,
+          cuisine: data.cuisine || '',
+          baseServings: data.baseServings || 4,
+          ingredients: data.ingredients || [],
+          steps: data.steps || [],
+          source: data.source || 'catalog',
+          thumbnail: data.thumbnail || null,
+          spoonacularId: data.spoonacularId || null,
+          mealDbId: data.mealDbId || null,
+          catalogId: doc.id,
+        });
+      }
+    }
+    results.sort((a, b) => b.matchScore - a.matchScore);
+    return results.slice(0, limit);
+  } catch (err) {
+    console.error('[Catalog] Search error:', err.message);
+    return [];
+  }
+}
+
+async function saveToCatalog(recipes, source) {
+  if (!adminDb) return;
+  for (const r of recipes) {
+    try {
+      const docId = source === 'spoonacular' ? String(r.spoonacularId)
+        : source === 'themealdb' ? `mdb_${r.mealDbId}` : null;
+      if (!docId) continue;
+
+      const ref = adminDb.collection('recipe_catalog').doc(docId);
+      const existing = await ref.get();
+      if (existing.exists) {
+        await ref.update({ useCount: FieldValue.increment(1) });
+      } else {
+        const indexedIngredients = (r.ingredients || [])
+          .map(i => (i.name || '').toLowerCase().trim())
+          .filter(Boolean);
+        await ref.set({
+          id: docId,
+          source,
+          spoonacularId: r.spoonacularId || null,
+          mealDbId: r.mealDbId || null,
+          title: r.title,
+          description: r.description || '',
+          cookTime: r.cookTime || '',
+          difficulty: r.difficulty || '',
+          cuisine: r.cuisine || '',
+          baseServings: r.baseServings || 4,
+          ingredients: r.ingredients || [],
+          indexedIngredients,
+          steps: r.steps || [],
+          thumbnail: r.thumbnail || null,
+          tags: r.tags || [],
+          fetchedAt: FieldValue.serverTimestamp(),
+          useCount: 1,
+          avgRating: 0,
+          ratingCount: 0,
+          sourceData: {},
+        });
+      }
+    } catch (err) {
+      console.error('[Catalog] Save error:', err.message);
+    }
+  }
+}
+
 // ── POST /api/recipes — Hybrid: TheMealDB + Spoonacular + Claude ────────────
 app.post('/api/recipes', async (req, res) => {
-  const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights, expiringIngredients, mealTypeHint } = req.body;
+  const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights, expiringIngredients, mealTypeHint, seenRecipeIds } = req.body;
   if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
 
   const pantryNames = extractIngredientNames(ingredients);
   const TARGET = 5;
+  const excludeIds = Array.isArray(seenRecipeIds) ? seenRecipeIds : [];
 
   try {
-    // Tier 1 + 2: TheMealDB and Spoonacular in parallel
     const searchTerms = pickSearchIngredients(pantryNames);
     console.log('[Recipes] Searching base ingredients:', searchTerms.join(', '));
 
-    const [dbRaw, spoonRaw] = await Promise.all([
-      searchTheMealDB(searchTerms, pantryNames).catch(err => {
-        console.error('[Recipes] TheMealDB failed:', err.message);
-        return [];
-      }),
-      searchSpoonacular(searchTerms, pantryNames, TARGET).catch(err => {
-        console.error('[Recipes] Spoonacular failed:', err.message);
-        return [];
-      }),
-    ]);
+    // Try catalog first (fast, free)
+    const catalogHits = await searchCatalog(pantryNames, excludeIds, TARGET);
+    let catalogRecipes = [];
 
-    let dbRecipes = dbRaw.filter(r => r.matchScore >= 20).sort((a, b) => b.matchScore - a.matchScore).slice(0, 3);
-    console.log('[Recipes] TheMealDB returned:', dbRecipes.length, 'recipes');
+    if (catalogHits.length >= 3) {
+      console.log('[Recipes] Catalog hit:', catalogHits.length, 'recipes found');
+      catalogRecipes = catalogHits;
+    } else {
+      console.log('[Recipes] Catalog miss — fetching from APIs');
 
-    const seenTitles = new Set(dbRecipes.map(r => r.title.toLowerCase()));
-    let spoonRecipes = spoonRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - dbRecipes.length);
-    spoonRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
-    console.log('[Recipes] Spoonacular returned:', spoonRecipes.length, 'recipes');
+      const [dbRaw, spoonRaw] = await Promise.all([
+        searchTheMealDB(searchTerms, pantryNames).catch(err => {
+          console.error('[Recipes] TheMealDB failed:', err.message);
+          return [];
+        }),
+        searchSpoonacular(searchTerms, pantryNames, TARGET).catch(err => {
+          console.error('[Recipes] Spoonacular failed:', err.message);
+          return [];
+        }),
+      ]);
 
-    const catalogRecipes = [...dbRecipes, ...spoonRecipes];
+      let dbRecipes = dbRaw.filter(r => r.matchScore >= 20).sort((a, b) => b.matchScore - a.matchScore).slice(0, 3);
+      console.log('[Recipes] TheMealDB returned:', dbRecipes.length, 'recipes');
+
+      const seenTitles = new Set(dbRecipes.map(r => r.title.toLowerCase()));
+      let spoonRecipes = spoonRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - dbRecipes.length);
+      spoonRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
+      console.log('[Recipes] Spoonacular returned:', spoonRecipes.length, 'recipes');
+
+      // Save all API results to catalog (background, don't await)
+      saveToCatalog(dbRecipes, 'themealdb').catch(() => {});
+      saveToCatalog(spoonRecipes, 'spoonacular').catch(() => {});
+
+      // Combine catalog partial hits with fresh API results, deduplicate
+      const combined = [...catalogHits];
+      const usedTitles = new Set(combined.map(r => r.title.toLowerCase()));
+      for (const r of [...dbRecipes, ...spoonRecipes]) {
+        if (!usedTitles.has(r.title.toLowerCase())) {
+          usedTitles.add(r.title.toLowerCase());
+          combined.push(r);
+        }
+      }
+      catalogRecipes = combined;
+    }
+
     const existingTitles = catalogRecipes.map(r => r.title);
 
     // Tier 3: Claude Haiku for remaining slots
@@ -418,8 +540,10 @@ app.post('/api/recipes', async (req, res) => {
     let mealTypeClause = '';
     if (mealTypeHint) mealTypeClause = `\nMEAL TYPE: ${mealTypeHint}.`;
 
-    const excludeClause = existingTitles.length > 0
-      ? `\nDo NOT suggest any of these already found recipes: ${existingTitles.join(', ')}.`
+    const allExcludeTitles = [...existingTitles];
+    if (excludeIds.length > 0) allExcludeTitles.push(...excludeIds);
+    const excludeClause = allExcludeTitles.length > 0
+      ? `\nDo NOT suggest any of these already found recipes: ${allExcludeTitles.join(', ')}.`
       : '';
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -474,9 +598,18 @@ CRITICAL: missingIngredients must ONLY contain names that also appear in the ing
 
     const allRecipes = [...catalogRecipes, ...aiRecipes];
     allRecipes.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
-    console.log('[Recipes] Returning', allRecipes.length, 'total recipes');
+    const finalRecipes = allRecipes.slice(0, TARGET);
+    console.log('[Recipes] Returning', finalRecipes.length, 'total recipes');
 
-    res.json({ recipes: allRecipes.slice(0, TARGET) });
+    // Increment useCount for catalog recipes being served (background)
+    if (adminDb) {
+      for (const r of finalRecipes) {
+        const catId = r.catalogId || (r.spoonacularId ? String(r.spoonacularId) : r.mealDbId ? `mdb_${r.mealDbId}` : null);
+        if (catId) adminDb.collection('recipe_catalog').doc(catId).update({ useCount: FieldValue.increment(1) }).catch(() => {});
+      }
+    }
+
+    res.json({ recipes: finalRecipes });
   } catch (err) {
     console.error('Recipe error:', err);
     res.status(500).json({ error: 'Recipe generation failed' });

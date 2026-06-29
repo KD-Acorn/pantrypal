@@ -211,6 +211,7 @@ export default function RecipeCard({
   const [servings, setServings] = useState(recipe.baseServings || 2);
   const [nutritionTip, setNutritionTip] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [imgError, setImgError] = useState(false);
 
   const enabledPartners = useMemo(() => {
     const ids = settings?.shoppingPartners || [];
@@ -262,6 +263,15 @@ export default function RecipeCard({
     }}
       onClick={collapsed ? onToggleCollapse : undefined}
     >
+      {recipe.thumbnail && !imgError && (
+        <img
+          src={recipe.thumbnail}
+          alt={recipe.title}
+          loading="lazy"
+          onError={() => setImgError(true)}
+          style={{ width: '100%', height: 180, objectFit: 'cover', objectPosition: 'center', display: 'block' }}
+        />
+      )}
       <div style={{ padding: collapsed ? '14px 20px' : 20 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
           <h3 style={{
@@ -415,10 +425,6 @@ export default function RecipeCard({
         transition: 'max-height 0.35s ease',
       }}>
         <div style={{ padding: '0 20px 20px', borderTop: '1px solid #f0f0f0' }}>
-          {recipe.thumbnail && (
-            <img src={recipe.thumbnail} alt={recipe.title}
-              style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 8, marginTop: 16 }} />
-          )}
           {scaledIngredients.length > 0 && (
             <div style={{ marginTop: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>

@@ -6,6 +6,7 @@ import { trackEvent } from '../utils/analytics';
 import MadeItSheet from '../components/MadeItSheet';
 import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
 import CommunityFeed from './CommunityFeed';
+import useSeenRecipes from '../hooks/useSeenRecipes';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const CUISINES = ['Any', 'Italian', 'Asian', 'Mexican', 'Quick & Easy', 'Mediterranean'];
@@ -39,6 +40,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
   const [useExpiring, setUseExpiring] = useState(false);
 
   const lastShuffleTime = useRef(Date.now());
+  const seenRecipes = useSeenRecipes();
 
   const activeDietaryFilters = sessionDietaryOverrides !== null
     ? sessionDietaryOverrides
@@ -73,7 +75,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
 
       const cuisineHint = filterCuisine !== 'Any' ? filterCuisine : CUISINES[idx];
 
-      const body = { ingredients: formatted, cuisineHint };
+      const body = { ingredients: formatted, cuisineHint, seenRecipeIds: seenRecipes.getSeenIds() };
 
       if (useExpiring) {
         const now = Date.now();
@@ -106,6 +108,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
       const data = await resp.json();
       setRecipes(data.recipes || []);
       if (data.recipes?.length) {
+        seenRecipes.markSeen(data.recipes);
         if (rateLimit) rateLimit.increment('recipe_generate');
         trackEvent('recipe_generate', { count: data.recipes.length, cuisine: cuisineHint });
       }
@@ -127,6 +130,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
       }
     }
     lastShuffleTime.current = Date.now();
+    seenRecipes.incrementShuffle();
     const next = (cuisineIdx + 1) % CUISINES.length;
     setCuisineIdx(next);
     fetchRecipes(next);
