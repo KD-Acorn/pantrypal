@@ -3,3 +3,5 @@ dist/
 .env
 *.log
 frontend/src/firebase.js
+backend/serviceAccount.json
+backend/serviceAccount.json
