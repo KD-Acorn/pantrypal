@@ -120,17 +120,36 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (!currentUser) return;
-    const unsub = onSnapshot(doc(db, 'pending_deletions', currentUser.uid), (snap) => {
+    if (!currentUser?.uid) return;
+    console.log('[PendingDeletion] Setting up listener for uid:', currentUser.uid);
+    const unsub = onSnapshot(
+      doc(db, 'pending_deletions', currentUser.uid),
+      (snap) => {
+        console.log('[PendingDeletion] Snapshot received, exists:', snap.exists(), 'Data:', snap.data());
+        if (snap.exists() && snap.data().status === 'pending') {
+          setScheduledFor(snap.data().scheduledFor);
+          setShowPendingDeletion(true);
+        } else {
+          setShowPendingDeletion(false);
+          setScheduledFor(null);
+        }
+      },
+      (error) => {
+        console.error('[PendingDeletion] onSnapshot error:', error);
+      }
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    getDoc(doc(db, 'pending_deletions', currentUser.uid)).then(snap => {
       if (snap.exists() && snap.data().status === 'pending') {
         setScheduledFor(snap.data().scheduledFor);
         setShowPendingDeletion(true);
-      } else {
-        setShowPendingDeletion(false);
       }
-    });
-    return unsub;
-  }, [currentUser]);
+    }).catch(() => {});
+  }, [currentUser?.uid]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -157,6 +176,19 @@ function AppContent() {
   }
 
   if (!currentUser) return <AuthPage />;
+
+  if (showPendingDeletion) {
+    return (
+      <PendingDeletionScreen
+        scheduledFor={scheduledFor}
+        currentUser={currentUser}
+        onCancelled={() => {
+          setShowPendingDeletion(false);
+          setScheduledFor(null);
+        }}
+      />
+    );
+  }
 
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100dvh' }}>
@@ -197,16 +229,6 @@ function AppContent() {
           show={showTour}
           onComplete={() => setShowTour(false)}
           onSwitchTab={setTab}
-        />
-      )}
-      {showPendingDeletion && (
-        <PendingDeletionScreen
-          scheduledFor={scheduledFor}
-          currentUser={currentUser}
-          onCancelled={() => {
-            setShowPendingDeletion(false);
-            toast.show('Account deletion cancelled. Welcome back!', 'success');
-          }}
         />
       )}
     </div>

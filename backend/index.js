@@ -13,9 +13,18 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '..', '.env') });
 
-initializeApp({ projectId: 'pantrypal-ab665' });
-const adminDb = getFirestore();
-const adminAuth = getAdminAuth();
+let adminDb = null;
+let adminAuth = null;
+try {
+  const serviceAccount = JSON.parse(
+    fs.readFileSync(resolve(__dirname, 'serviceAccount.json'), 'utf8')
+  );
+  initializeApp({ credential: cert(serviceAccount) });
+  adminDb = getFirestore();
+  adminAuth = getAdminAuth();
+} catch (err) {
+  console.warn('[Admin] Service account not found — Firebase Admin features (account deletion) will be unavailable:', err.message);
+}
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -721,6 +730,7 @@ Return ONLY a valid JSON array of 3 substitution objects. No markdown, no preamb
 
 // ── POST /api/delete-account — Account deletion with 7-day grace period ──────
 app.post('/api/delete-account', async (req, res) => {
+  if (!adminAuth) return res.status(503).json({ error: 'Account deletion temporarily unavailable. Please contact support.' });
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing auth token' });
@@ -792,6 +802,7 @@ app.post('/api/delete-account', async (req, res) => {
 
 // ── POST /api/delete-account/cancel — Cancel pending deletion ─────────────────
 app.post('/api/delete-account/cancel', async (req, res) => {
+  if (!adminAuth) return res.status(503).json({ error: 'Account deletion temporarily unavailable. Please contact support.' });
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
 
@@ -815,6 +826,7 @@ async function deleteSubcollection(parentPath, subcollection) {
 }
 
 app.post('/api/delete-account/now', async (req, res) => {
+  if (!adminAuth) return res.status(503).json({ error: 'Account deletion temporarily unavailable. Please contact support.' });
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
 
