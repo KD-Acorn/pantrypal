@@ -210,6 +210,7 @@ export default function RecipeCard({
   const [showFull, setShowFull] = useState(false);
   const [servings, setServings] = useState(recipe.baseServings || 2);
   const [nutritionTip, setNutritionTip] = useState(false);
+  const [showNutrition, setShowNutrition] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [imgError, setImgError] = useState(false);
 
@@ -383,12 +384,59 @@ export default function RecipeCard({
               background: showFull ? '#f0fdf4' : '#fff', color: showFull ? '#059669' : '#374151',
               fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
             }}>Full Recipe {showFull ? '▴' : '▾'}</button>
-            <button onClick={(e) => { e.stopPropagation(); setNutritionTip(true); }} onMouseLeave={() => setNutritionTip(false)}
-              style={{ flex: 1, height: 38, borderRadius: 8, border: '1px solid #f0f0f0', background: '#fafafa', color: '#c0c0c0', fontSize: 13, fontWeight: 500, cursor: 'default', fontFamily: 'inherit', position: 'relative' }}>
-              Nutrition ▾
-              {nutritionTip && <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', background: '#1f2937', color: '#fff', fontSize: 11, padding: '4px 10px', borderRadius: 6, whiteSpace: 'nowrap', zIndex: 10 }}>Nutritional facts coming in v2</span>}
-            </button>
+            {recipe.nutrition?.calories > 0 ? (
+              <button onClick={(e) => { e.stopPropagation(); setShowNutrition(v => !v); }} style={{
+                flex: 1, height: 38, borderRadius: 8, border: '1px solid #e5e7eb',
+                background: showNutrition ? '#fffbeb' : '#fff', color: showNutrition ? '#92400e' : '#374151',
+                fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
+              }}>Nutrition {showNutrition ? '▴' : '▾'}</button>
+            ) : (
+              <button onClick={(e) => { e.stopPropagation(); setNutritionTip(true); }} onMouseLeave={() => setNutritionTip(false)}
+                style={{ flex: 1, height: 38, borderRadius: 8, border: '1px solid #f0f0f0', background: '#fafafa', color: '#c0c0c0', fontSize: 13, fontWeight: 500, cursor: 'default', fontFamily: 'inherit', position: 'relative' }}>
+                Nutrition ▾
+                {nutritionTip && <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', background: '#1f2937', color: '#fff', fontSize: 11, padding: '4px 10px', borderRadius: 6, whiteSpace: 'nowrap', zIndex: 10 }}>Nutritional facts coming in v2</span>}
+              </button>
+            )}
           </div>
+
+          {showNutrition && recipe.nutrition?.calories > 0 && (() => {
+            const base = recipe.baseServings || 2;
+            const scale = servings / base;
+            const scaled = scale !== 1;
+            const n = {
+              calories: Math.round(recipe.nutrition.calories * scale),
+              protein: Math.round((recipe.nutrition.protein || 0) * scale),
+              carbs: Math.round((recipe.nutrition.carbs || 0) * scale),
+              fat: Math.round((recipe.nutrition.fat || 0) * scale),
+              fiber: Math.round((recipe.nutrition.fiber || 0) * scale),
+            };
+            const box = (icon, value, unit, label) => (
+              <div style={{ flex: 1, background: '#fffbeb', borderRadius: 10, padding: '10px 6px', textAlign: 'center' }}>
+                <div style={{ fontSize: 14, marginBottom: 2 }}>{icon}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#111827' }}>{value}<span style={{ fontSize: 12, fontWeight: 400, color: '#6b7280' }}>{unit}</span></div>
+                <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>{label}</div>
+              </div>
+            );
+            return (
+              <div style={{ marginTop: 10, padding: 12, background: '#fefce8', borderRadius: 10, border: '1px solid #fde68a' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#92400e', marginBottom: 10 }}>
+                  Nutrition per serving{scaled ? ' (scaled)' : ''}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {box('🔥', n.calories, 'kcal', 'Calories')}
+                  {box('💪', n.protein, 'g', 'Protein')}
+                  {box('🌾', n.carbs, 'g', 'Carbs')}
+                  {box('🥑', n.fat, 'g', 'Fat')}
+                </div>
+                {n.fiber > 0 && (
+                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>Fiber: {n.fiber}g per serving</div>
+                )}
+                <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 6 }}>
+                  Estimates based on {base} servings
+                </div>
+              </div>
+            );
+          })()}
 
           {mode === 'saved' && onShareToggle && (
             <button onClick={(e) => { e.stopPropagation(); onShareToggle(recipe); }} style={{
@@ -482,6 +530,17 @@ export default function RecipeCard({
               <ol style={{ margin: 0, paddingLeft: 22, fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
                 {recipe.steps.map((s, j) => <li key={j} style={{ marginBottom: 10, paddingLeft: 4 }}>{s}</li>)}
               </ol>
+            </div>
+          )}
+          {(!recipe.steps || recipe.steps.length === 0) && recipe.sourceUrl && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 8 }}>Instructions</div>
+              <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 10 }}>View full recipe instructions:</div>
+              <button onClick={(e) => { e.stopPropagation(); window.open(recipe.sourceUrl, '_blank', 'noopener'); }} style={{
+                width: '100%', height: 40, borderRadius: 8, border: '1px solid #e5e7eb',
+                background: '#fff', color: '#10b981', fontSize: 13, fontWeight: 600,
+                cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}>🔗 Open Original Recipe</button>
             </div>
           )}
           {(!recipe.ingredients || recipe.ingredients.length === 0) && recipe.steps?.length > 0 && (

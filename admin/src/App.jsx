@@ -6,6 +6,7 @@ import DashboardPage from './pages/DashboardPage';
 import UsersPage from './pages/UsersPage';
 import BugReportsPage from './pages/BugReportsPage';
 import RecipesPage from './pages/RecipesPage';
+import CatalogPage from './pages/CatalogPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import PlaceholderPage from './pages/PlaceholderPage';
 
@@ -32,6 +33,7 @@ function AdminPanel() {
       case 'dashboard': return <DashboardPage />;
       case 'users': return <UsersPage />;
       case 'recipes': return <RecipesPage />;
+      case 'catalog': return <CatalogPage />;
       case 'bugs': return <BugReportsPage />;
       case 'analytics': return <AnalyticsPage />;
       case 'settings': return <PlaceholderPage title="Settings" icon="⚙️" description="Admin panel configuration" />;

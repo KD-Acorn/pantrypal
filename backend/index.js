@@ -253,6 +253,73 @@ function stripHtml(str) {
   return (str || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim();
 }
 
+// ── Edamam Recipe Search ────────────────────────────────────────────────────
+async function searchEdamam(filteredIngredients, pantryNames, needed) {
+  const appId = process.env.EDAMAM_APP_ID;
+  const appKey = process.env.EDAMAM_APP_KEY;
+  if (!appId || !appKey || needed <= 0) return [];
+
+  try {
+    const url = `https://api.edamam.com/api/recipes/v2?type=public&q=${encodeURIComponent(filteredIngredients.join(','))}&app_id=${appId}&app_key=${appKey}&ingr=${needed * 2}&random=true`;
+    const resp = await fetchWithTimeout(url, 5000);
+    if (!resp.ok) { console.error('[Edamam] Search error:', resp.status); return []; }
+    const data = await resp.json();
+    const hits = data.hits || [];
+
+    const recipes = [];
+    for (const hit of hits) {
+      const r = hit.recipe;
+      if (!r) continue;
+      const ingredients = (r.ingredients || []).map(i => ({
+        amount: Math.round((i.quantity || 1) * 100) / 100,
+        unit: i.measure === '<unit>' ? 'whole' : (i.measure || 'whole').toLowerCase(),
+        name: (i.food || '').toLowerCase(),
+      }));
+      const { score: matchScore } = calcMatchScore(ingredients, pantryNames);
+      if (matchScore < 20) continue;
+      const missing = calcMissing(ingredients, pantryNames);
+      const mins = r.totalTime || 30;
+      const servings = r.yield || 4;
+      const topIngredients = ingredients.slice(0, 3).map(i => i.name).join(', ');
+
+      const nutrition = {};
+      try {
+        nutrition.calories = Math.round((r.calories || 0) / servings);
+        nutrition.protein = Math.round((r.totalNutrients?.PROCNT?.quantity || 0) / servings);
+        nutrition.carbs = Math.round((r.totalNutrients?.CHOCDF?.quantity || 0) / servings);
+        nutrition.fat = Math.round((r.totalNutrients?.FAT?.quantity || 0) / servings);
+        nutrition.fiber = Math.round((r.totalNutrients?.FIBTG?.quantity || 0) / servings);
+      } catch {}
+
+      recipes.push({
+        title: r.label,
+        description: `A ${(r.cuisineType?.[0] || 'homestyle')} dish featuring ${topIngredients}.`,
+        cookTime: mins > 0 ? `${mins} min` : '30 min',
+        difficulty: mins > 0 && mins <= 20 ? 'Easy' : mins <= 45 ? 'Medium' : 'Hard',
+        matchScore,
+        missingIngredients: missing,
+        cuisine: r.cuisineType?.[0] || r.mealType?.[0] || 'International',
+        baseServings: servings,
+        ingredients,
+        steps: [],
+        source: 'edamam',
+        sourceLabel: null,
+        thumbnail: r.image || null,
+        edamamId: r.uri,
+        sourceUrl: r.url || null,
+        nutrition,
+        tags: [...(r.cuisineType || []), ...(r.dishType || [])],
+      });
+    }
+
+    recipes.sort((a, b) => b.matchScore - a.matchScore);
+    return recipes.slice(0, needed);
+  } catch (err) {
+    console.error('[Edamam] Error:', err.message);
+    return [];
+  }
+}
+
 const spoonCache = new Map();
 const SPOON_CACHE_TTL = 60 * 60 * 1000;
 
@@ -386,6 +453,8 @@ async function searchCatalog(ingredientNames, excludeIds, limit) {
           spoonacularId: data.spoonacularId || null,
           mealDbId: data.mealDbId || null,
           catalogId: doc.id,
+          nutrition: data.nutrition || null,
+          sourceUrl: data.sourceUrl || null,
         });
       }
     }
@@ -402,7 +471,9 @@ async function saveToCatalog(recipes, source) {
   for (const r of recipes) {
     try {
       const docId = source === 'spoonacular' ? String(r.spoonacularId)
-        : source === 'themealdb' ? `mdb_${r.mealDbId}` : null;
+        : source === 'themealdb' ? `mdb_${r.mealDbId}`
+        : source === 'edamam' && r.edamamId ? `edm_${r.edamamId.split('#recipe_')[1] || r.edamamId.slice(-12)}`
+        : null;
       if (!docId) continue;
 
       const ref = adminDb.collection('recipe_catalog').doc(docId);
@@ -431,6 +502,8 @@ async function saveToCatalog(recipes, source) {
           tags: r.tags || [],
           fetchedAt: FieldValue.serverTimestamp(),
           useCount: 1,
+          nutrition: r.nutrition || null,
+          sourceUrl: r.sourceUrl || null,
           avgRating: 0,
           ratingCount: 0,
           sourceData: {},
@@ -465,13 +538,14 @@ app.post('/api/recipes', async (req, res) => {
     } else {
       console.log('[Recipes] Catalog miss — fetching from APIs');
 
-      const [dbRaw, spoonRaw] = await Promise.all([
+      // Tier 1 + 1.5: TheMealDB and Edamam in parallel (both free)
+      const [dbRaw, edamamRaw] = await Promise.all([
         searchTheMealDB(searchTerms, pantryNames).catch(err => {
           console.error('[Recipes] TheMealDB failed:', err.message);
           return [];
         }),
-        searchSpoonacular(searchTerms, pantryNames, TARGET).catch(err => {
-          console.error('[Recipes] Spoonacular failed:', err.message);
+        searchEdamam(searchTerms, pantryNames, TARGET).catch(err => {
+          console.error('[Recipes] Edamam failed:', err.message);
           return [];
         }),
       ]);
@@ -480,18 +554,32 @@ app.post('/api/recipes', async (req, res) => {
       console.log('[Recipes] TheMealDB returned:', dbRecipes.length, 'recipes');
 
       const seenTitles = new Set(dbRecipes.map(r => r.title.toLowerCase()));
-      let spoonRecipes = spoonRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - dbRecipes.length);
-      spoonRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
-      console.log('[Recipes] Spoonacular returned:', spoonRecipes.length, 'recipes');
+      let edamamRecipes = edamamRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - dbRecipes.length);
+      edamamRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
+      console.log('[Recipes] Edamam returned:', edamamRecipes.length, 'recipes');
+
+      // Tier 2: Spoonacular only if free tiers didn't fill enough
+      let spoonRecipes = [];
+      const freeCount = dbRecipes.length + edamamRecipes.length;
+      if (freeCount < 3) {
+        const spoonRaw = await searchSpoonacular(searchTerms, pantryNames, TARGET - freeCount).catch(err => {
+          console.error('[Recipes] Spoonacular failed:', err.message);
+          return [];
+        });
+        spoonRecipes = spoonRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - freeCount);
+        spoonRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
+        console.log('[Recipes] Spoonacular returned:', spoonRecipes.length, 'recipes');
+      }
 
       // Save all API results to catalog (background, don't await)
       saveToCatalog(dbRecipes, 'themealdb').catch(() => {});
+      saveToCatalog(edamamRecipes, 'edamam').catch(() => {});
       saveToCatalog(spoonRecipes, 'spoonacular').catch(() => {});
 
       // Combine catalog partial hits with fresh API results, deduplicate
       const combined = [...catalogHits];
       const usedTitles = new Set(combined.map(r => r.title.toLowerCase()));
-      for (const r of [...dbRecipes, ...spoonRecipes]) {
+      for (const r of [...dbRecipes, ...edamamRecipes, ...spoonRecipes]) {
         if (!usedTitles.has(r.title.toLowerCase())) {
           usedTitles.add(r.title.toLowerCase());
           combined.push(r);
@@ -1020,6 +1108,165 @@ app.post('/api/delete-account/now', async (req, res) => {
     console.error('Immediate delete error:', err);
     res.status(500).json({ error: 'Account deletion failed' });
   }
+});
+
+// ── Admin routes — Catalog Management ────────────────────────────────────────
+const ADMIN_UID = process.env.ADMIN_UID;
+
+async function verifyAdmin(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ') || !adminAuth || !ADMIN_UID) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+    if (decoded.uid !== ADMIN_UID) return res.status(403).json({ error: 'Not admin' });
+    req.adminUid = decoded.uid;
+    next();
+  } catch { res.status(403).json({ error: 'Invalid token' }); }
+}
+
+let seedState = { running: false, stop: false, logs: [], saved: 0, total: 0, pointsUsed: 0 };
+
+app.post('/api/admin/seed-catalog', verifyAdmin, async (req, res) => {
+  if (seedState.running) return res.json({ error: 'Seed already running' });
+
+  const apiKey = process.env.SPOONACULAR_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'SPOONACULAR_API_KEY not set' });
+
+  const ingredients = req.body.ingredients?.length ? req.body.ingredients : [
+    'chicken breast', 'ground beef', 'eggs', 'salmon', 'shrimp', 'tofu', 'pork',
+    'pasta', 'rice', 'garlic', 'onion', 'tomato', 'potato', 'broccoli',
+    'cheese', 'butter', 'chicken garlic', 'beef onion', 'pasta tomato',
+    'rice chicken', 'salmon lemon', 'shrimp garlic butter',
+  ];
+
+  seedState = { running: true, stop: false, logs: [], saved: 0, total: ingredients.length, pointsUsed: 0 };
+  res.json({ started: true, total: ingredients.length });
+
+  (async () => {
+    for (let i = 0; i < ingredients.length; i++) {
+      if (seedState.stop || seedState.pointsUsed >= 45) {
+        seedState.logs.push(seedState.stop ? 'Stopped by admin.' : 'Point limit reached.');
+        break;
+      }
+      const query = ingredients[i];
+      seedState.logs.push(`Fetching: ${query}`);
+
+      try {
+        const searchUrl = `https://api.spoonacular.com/recipes/findByIngredients?ingredients=${encodeURIComponent(query)}&number=8&ranking=1&ignorePantry=false&apiKey=${apiKey}`;
+        const searchResp = await fetch(searchUrl);
+        if (searchResp.status === 402) { seedState.logs.push('Spoonacular daily quota exhausted.'); break; }
+        if (!searchResp.ok) { seedState.logs.push(`Search error ${searchResp.status}`); continue; }
+        const candidates = await searchResp.json();
+        seedState.pointsUsed++;
+
+        for (const c of candidates) {
+          if (seedState.stop || seedState.pointsUsed >= 45) break;
+          const docId = String(c.id);
+          const existing = await adminDb.collection('recipe_catalog').doc(docId).get();
+          if (existing.exists) continue;
+
+          await new Promise(r => setTimeout(r, 500));
+          const detailUrl = `https://api.spoonacular.com/recipes/${c.id}/information?apiKey=${apiKey}&includeNutrition=true`;
+          const detailResp = await fetch(detailUrl);
+          if (detailResp.status === 402) { seedState.logs.push('Spoonacular daily quota exhausted.'); break; }
+          if (!detailResp.ok) continue;
+          const recipe = await detailResp.json();
+          seedState.pointsUsed++;
+
+          const recipeIngredients = (recipe.extendedIngredients || []).map(ing => ({
+            amount: Math.round((ing.amount || 1) * 100) / 100,
+            unit: ing.unit || 'whole',
+            name: (ing.name || '').toLowerCase(),
+          }));
+          const mins = recipe.readyInMinutes || 30;
+          const steps = recipe.analyzedInstructions?.[0]?.steps?.map(s => s.step) || [];
+          const desc = stripHtml(recipe.summary || '').slice(0, 200);
+          const nutrients = recipe.nutrition?.nutrients || [];
+          const findNutrient = (name) => nutrients.find(n => n.name === name)?.amount || 0;
+          const servings = recipe.servings || 4;
+
+          await adminDb.collection('recipe_catalog').doc(docId).set({
+            id: docId, source: 'spoonacular', spoonacularId: recipe.id, mealDbId: null,
+            title: recipe.title,
+            description: desc + (desc.length >= 200 ? '...' : ''),
+            cookTime: `${mins} min`,
+            difficulty: mins <= 20 ? 'Easy' : mins <= 45 ? 'Medium' : 'Hard',
+            cuisine: recipe.cuisines?.[0] || recipe.dishTypes?.[0] || 'International',
+            baseServings: servings, ingredients: recipeIngredients,
+            indexedIngredients: recipeIngredients.map(i => i.name).filter(Boolean),
+            steps, thumbnail: (recipe.image || '').replace('312x231', '556x370') || null,
+            tags: [...(recipe.cuisines || []), ...(recipe.dishTypes || [])],
+            fetchedAt: FieldValue.serverTimestamp(), useCount: 0,
+            nutrition: {
+              calories: Math.round(findNutrient('Calories') / servings),
+              protein: Math.round(findNutrient('Protein') / servings),
+              carbs: Math.round(findNutrient('Carbohydrates') / servings),
+              fat: Math.round(findNutrient('Fat') / servings),
+              fiber: Math.round(findNutrient('Fiber') / servings),
+            },
+            sourceUrl: recipe.sourceUrl || null, avgRating: 0, ratingCount: 0, sourceData: {},
+          });
+
+          seedState.saved++;
+          seedState.logs.push(`Saved: ${recipe.title}`);
+        }
+      } catch (err) {
+        seedState.logs.push(`Error: ${err.message}`);
+      }
+    }
+    seedState.running = false;
+    seedState.logs.push(`Done. ${seedState.saved} recipes saved, ${seedState.pointsUsed} pts used.`);
+  })();
+});
+
+app.post('/api/admin/seed-catalog/stop', verifyAdmin, (_req, res) => {
+  seedState.stop = true;
+  res.json({ stopped: true });
+});
+
+app.get('/api/admin/seed-catalog/status', verifyAdmin, (_req, res) => {
+  res.json(seedState);
+});
+
+app.get('/api/admin/catalog/stats', verifyAdmin, async (_req, res) => {
+  try {
+    const snap = await adminDb.collection('recipe_catalog').get();
+    const bySource = { spoonacular: 0, themealdb: 0, edamam: 0, other: 0 };
+    let hasNutrition = 0;
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      bySource[d.source] = (bySource[d.source] || 0) + 1;
+      if (d.nutrition?.calories > 0) hasNutrition++;
+    }
+    const configSnap = await adminDb.collection('config').doc('catalog_sync').get();
+    const syncData = configSnap.exists ? configSnap.data() : {};
+    res.json({ total: snap.size, bySource, hasNutrition, lastSync: syncData.lastSyncAt || null });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/catalog/recipes', verifyAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageLimit = parseInt(req.query.limit) || 20;
+    const sourceFilter = req.query.source || null;
+
+    let q = adminDb.collection('recipe_catalog').orderBy('title');
+    if (sourceFilter) q = q.where('source', '==', sourceFilter);
+    const snap = await q.get();
+
+    const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const start = (page - 1) * pageLimit;
+    res.json({ recipes: all.slice(start, start + pageLimit), total: all.length, page });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/catalog/recipes/:id', verifyAdmin, async (req, res) => {
+  try {
+    await adminDb.collection('recipe_catalog').doc(req.params.id).delete();
+    res.json({ deleted: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 3003;

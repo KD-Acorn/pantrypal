@@ -5,6 +5,7 @@ const NAV_ITEMS = [
   { key: 'dashboard', icon: '📊', label: 'Dashboard' },
   { key: 'users', icon: '👥', label: 'Users' },
   { key: 'recipes', icon: '🍽', label: 'Recipes' },
+  { key: 'catalog', icon: '📚', label: 'Catalog' },
   { key: 'bugs', icon: '🐛', label: 'Bug Reports' },
   { key: 'analytics', icon: '📈', label: 'Analytics' },
   { key: 'settings', icon: '⚙️', label: 'Settings' },
