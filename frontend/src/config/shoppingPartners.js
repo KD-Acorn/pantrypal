@@ -2,8 +2,8 @@ const SHOPPING_PARTNERS = [
   {
     id: 'amazon_fresh',
     name: 'Amazon Fresh',
-    urlTemplate: 'https://www.amazon.com/s?k={ingredient}&i=amazonfresh',
-    icon: '🛒',
+    urlTemplate: "https://www.amazon.com/s?k={ingredient}&i=amazonfresh&tag=mypantryclub-20",
+  icon: "🛒"
   },
   {
     id: 'instacart',
