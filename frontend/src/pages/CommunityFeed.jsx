@@ -3,6 +3,7 @@ import { collection, query, orderBy, limit, getDocs, startAfter, doc, updateDoc 
 import { db } from '../firebase';
 import RecipeCard from '../components/RecipeCard';
 import Spinner from '../components/Spinner';
+import CreateRecipeSheet from '../components/CreateRecipeSheet';
 
 const PAGE_SIZE = 20;
 // Key kept as "pantrypal_*" for backward compatibility
@@ -42,13 +43,14 @@ function pantryMatchesRecipe(recipe, pantryItems) {
   });
 }
 
-export default function CommunityFeed({ pantry, toast, saved, grocery, onSwitchToAI }) {
+export default function CommunityFeed({ pantry, toast, saved, grocery, onSwitchToAI, userRecipes, household, displayName }) {
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [lastDoc, setLastDoc] = useState(null);
   const [hasMore, setHasMore] = useState(true);
   const [communityRatings, setCommunityRatings] = useState(loadCommunityRatings);
+  const [showCreate, setShowCreate] = useState(false);
 
   async function fetchRecipes(isLoadMore = false) {
     if (isLoadMore) setLoadingMore(true);
@@ -172,7 +174,18 @@ export default function CommunityFeed({ pantry, toast, saved, grocery, onSwitchT
       authorName: recipe.authorName || '',
     };
     saved.save(saveData);
+    if (recipe.isUserSubmitted && recipe.originalRecipeId && userRecipes) {
+      userRecipes.incrementSavedCount(recipe.originalRecipeId);
+    }
     toast.show('Recipe saved to your collection', 'success');
+  }
+
+  async function handleCreateRecipe(recipeData) {
+    if (!userRecipes) return;
+    await userRecipes.createRecipe(recipeData, displayName || '');
+    toast.show('Recipe created! 🎉', 'success');
+    setShowCreate(false);
+    if (recipeData.visibility === 'community') fetchRecipes();
   }
 
   if (loading) {
@@ -185,24 +198,66 @@ export default function CommunityFeed({ pantry, toast, saved, grocery, onSwitchT
 
   if (recipes.length === 0) {
     return (
-      <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
+      <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af', position: 'relative' }}>
+        {userRecipes && (
+          <button onClick={() => setShowCreate(true)} style={{
+            position: 'fixed', bottom: 80, right: 16, zIndex: 40,
+            width: 52, height: 52, borderRadius: '50%', border: 'none',
+            background: '#10b981', color: '#fff', fontSize: 20, cursor: 'pointer',
+            boxShadow: '0 4px 16px rgba(16,185,129,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }} title="Create Recipe">✏️</button>
+        )}
+        {showCreate && userRecipes && (
+          <CreateRecipeSheet
+            onClose={() => setShowCreate(false)}
+            onSave={handleCreateRecipe}
+            toast={toast}
+            household={household}
+          />
+        )}
         <div style={{ fontSize: 36, marginBottom: 8 }}>👥</div>
         <div style={{ fontSize: 14, marginBottom: 4, color: '#374151', fontWeight: 500 }}>
           No community recipes yet.
         </div>
         <div style={{ fontSize: 13, marginBottom: 20 }}>
-          Be the first to share one! Customize any recipe and share it with the community.
+          Be the first to share one! Create an original recipe or customize one from Discover.
         </div>
-        <button onClick={onSwitchToAI} style={{
-          fontSize: 14, fontWeight: 600, padding: '10px 24px', borderRadius: 10,
-          background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-        }}>Go to AI Recipes</button>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+          {userRecipes && (
+            <button onClick={() => setShowCreate(true)} style={{
+              fontSize: 14, fontWeight: 600, padding: '10px 24px', borderRadius: 10,
+              background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+            }}>✏️ Create Recipe</button>
+          )}
+          <button onClick={onSwitchToAI} style={{
+            fontSize: 14, fontWeight: 600, padding: '10px 24px', borderRadius: 10,
+            background: '#fff', color: '#374151', border: '1px solid #e5e7eb', cursor: 'pointer', fontFamily: 'inherit',
+          }}>Go to AI Recipes</button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, position: 'relative' }}>
+      {userRecipes && (
+        <button onClick={() => setShowCreate(true)} style={{
+          position: 'fixed', bottom: 80, right: 16, zIndex: 40,
+          width: 52, height: 52, borderRadius: '50%', border: 'none',
+          background: '#10b981', color: '#fff', fontSize: 20, cursor: 'pointer',
+          boxShadow: '0 4px 16px rgba(16,185,129,0.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }} title="Create Recipe">✏️</button>
+      )}
+      {showCreate && userRecipes && (
+        <CreateRecipeSheet
+          onClose={() => setShowCreate(false)}
+          onSave={handleCreateRecipe}
+          toast={toast}
+          household={household}
+        />
+      )}
       {sortedRecipes.map(r => (
         <RecipeCard
           key={r.id}

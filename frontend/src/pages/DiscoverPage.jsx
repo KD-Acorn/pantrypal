@@ -22,7 +22,7 @@ const DIETARY_LABELS = {
   'dairy-free': '🥛 Dairy-Free', 'nut-free': '🥜 Nut-Free', pescatarian: '🐟 Pescatarian',
 };
 
-export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings, rateLimit, grocery }) {
+export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings, rateLimit, grocery, userRecipes, household, displayName }) {
   const [discoverTab, setDiscoverTab] = useState('ai');
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -277,6 +277,9 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
           saved={saved}
           grocery={grocery}
           onSwitchToAI={() => setDiscoverTab('ai')}
+          userRecipes={userRecipes}
+          household={household}
+          displayName={displayName}
         />
       )}
 

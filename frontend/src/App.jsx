@@ -18,6 +18,7 @@ import useHousehold from './hooks/useHousehold';
 import useHouseholdPantry from './hooks/useHouseholdPantry';
 import useHouseholdRecipes from './hooks/useHouseholdRecipes';
 import useHouseholdMealPlan from './hooks/useHouseholdMealPlan';
+import useUserRecipes from './hooks/useUserRecipes';
 import ScanPage from './pages/ScanPage';
 import SettingsPage from './pages/SettingsPage';
 import PantryPage from './pages/PantryPage';
@@ -110,6 +111,7 @@ function AppContent() {
   const householdPantry = useHouseholdPantry(household.household?.id, household.logActivity);
   const householdRecipes = useHouseholdRecipes(household.household?.id, household.logActivity);
   const householdMealPlan = useHouseholdMealPlan(household.household?.id, household.logActivity);
+  const userRecipes = useUserRecipes(uid);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -194,8 +196,8 @@ function AppContent() {
       <MigrationBanner uid={uid} toast={toast} />
       {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} grocery={grocery} rateLimit={rateLimit} />}
       {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} household={household} householdPantry={householdPantry} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} grocery={grocery} saved={saved} />}
-      {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} household={household} householdRecipes={householdRecipes} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} mealPlan={mealPlan} householdMealPlan={householdMealPlan} />}
-      {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} grocery={grocery} />}
+      {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} household={household} householdRecipes={householdRecipes} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} mealPlan={mealPlan} householdMealPlan={householdMealPlan} userRecipes={userRecipes} />}
+      {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} grocery={grocery} userRecipes={userRecipes} household={household} displayName={settings.displayName || currentUser?.displayName || ''} />}
       <BugReportButton uid={uid} currentTab={tab} toast={toast} />
       <Toast toast={toast.toast} />
       <BottomNav active={tab} onChange={(t) => { setTab(t); trackEvent('page_view', { tab: t }, uid); }} />

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { doc, setDoc, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
@@ -6,6 +6,7 @@ import { trackEvent } from '../utils/analytics';
 import RecipeCard from '../components/RecipeCard';
 import MadeItSheet from '../components/MadeItSheet';
 import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
+import CreateRecipeSheet from '../components/CreateRecipeSheet';
 import Spinner from '../components/Spinner';
 
 // ── Saved Recipes constants ───────────────────────────────────────────────────
@@ -224,8 +225,25 @@ function RecipePicker({ onSelect, onClose, savedRecipes, pantryItems, toast, tar
   );
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtAmount(n) {
+  if (!n) return '';
+  const r = Math.round(n * 100) / 100;
+  return r % 1 === 0 ? String(r) : r.toFixed(2).replace(/\.?0+$/, '');
+}
+
+function VisibilityBadge({ v }) {
+  const map = { private: ['🔒', '#6b7280', '#f3f4f6'], household: ['🏠', '#1d4ed8', '#eff6ff'], community: ['🌍', '#065f46', '#ecfdf5'] };
+  const [icon, color, bg] = map[v] || map.private;
+  return (
+    <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: bg, color }}>
+      {icon} {v === 'private' ? 'Private' : v === 'household' ? 'Household' : 'Community'}
+    </span>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory, grocery, settings, household, householdRecipes, uid, displayName, mealPlan, householdMealPlan }) {
+export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory, grocery, settings, household, householdRecipes, uid, displayName, mealPlan, householdMealPlan, userRecipes }) {
   const { currentUser } = useAuth();
   const hh = household?.household;
 
@@ -245,6 +263,66 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
 
   // Cook History state
   const [expandedHistoryId, setExpandedHistoryId] = useState(null);
+
+  // My Creations state
+  const [expandedCreationId, setExpandedCreationId] = useState(null);
+  const [creationServings, setCreationServings] = useState(null);
+  const [showCreateSheet, setShowCreateSheet] = useState(false);
+  const [editingCreation, setEditingCreation] = useState(null);
+  const [deletingCreationId, setDeletingCreationId] = useState(null);
+  const [creationComments, setCreationComments] = useState([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const [changingVisId, setChangingVisId] = useState(null);
+
+  useEffect(() => {
+    if (!expandedCreationId || !userRecipes) return;
+    const recipe = userRecipes.recipes.find(r => r.id === expandedCreationId);
+    setCreationServings(recipe?.baseServings || 4);
+    setCreationComments([]);
+    setCommentText('');
+    if (recipe?.allowComments && recipe?.visibility !== 'private') {
+      setCommentsLoading(true);
+      userRecipes.getComments(expandedCreationId).then(c => {
+        setCreationComments(c);
+        setCommentsLoading(false);
+      }).catch(() => setCommentsLoading(false));
+    }
+  }, [expandedCreationId]);
+
+  async function handleCreationSave(recipeData) {
+    if (!userRecipes) return;
+    if (editingCreation) {
+      await userRecipes.updateRecipe(editingCreation.id, recipeData);
+      toast.show('Recipe updated', 'success');
+    } else {
+      await userRecipes.createRecipe(recipeData, displayName || '');
+      toast.show('Recipe created! 🎉', 'success');
+      setSubTab('creations');
+    }
+    setShowCreateSheet(false);
+    setEditingCreation(null);
+  }
+
+  async function handlePostComment(recipeId) {
+    if (!commentText.trim() || !userRecipes) return;
+    const newComment = await userRecipes.addComment(recipeId, commentText.trim(), displayName || '');
+    if (newComment) setCreationComments(prev => [newComment, ...prev]);
+    setCommentText('');
+  }
+
+  async function handleLikeComment(recipeId, commentId, likedBy) {
+    if (!userRecipes) return;
+    const { alreadyLiked, newLikedBy } = await userRecipes.likeComment(recipeId, commentId, likedBy);
+    setCreationComments(prev => prev.map(c =>
+      c.id === commentId ? { ...c, likes: alreadyLiked ? (c.likes || 1) - 1 : (c.likes || 0) + 1, likedBy: newLikedBy } : c
+    ));
+  }
+
+  function fmtCommentDate(ts) {
+    const d = ts?.toDate?.() || new Date();
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
 
   // Meal Plan state
   const [planTab, setPlanTab] = useState('personal');
@@ -351,6 +429,7 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, marginBottom: 4 }}>My Recipes</h1>
       <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 14 }}>
         {subTab === 'recipes' && (recipesTab === 'household' ? `${hh?.name || 'Household'} recipes` : 'Your saved recipe collection')}
+        {subTab === 'creations' && `${userRecipes?.recipes?.length || 0} recipe${(userRecipes?.recipes?.length || 0) !== 1 ? 's' : ''} created`}
         {subTab === 'mealplan' && `${assignedCount} meal${assignedCount !== 1 ? 's' : ''} planned this week`}
         {subTab === 'history' && `${cookHistory?.history?.length || 0} meals cooked`}
       </p>
@@ -359,11 +438,12 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
       <div style={{ display: 'flex', borderBottom: '2px solid #f0f0f0', marginBottom: 16 }}>
         {[
           { key: 'recipes', label: '📖 My Recipes' },
+          { key: 'creations', label: '✍️ My Creations' },
           { key: 'mealplan', label: '📅 Meal Plan' },
           { key: 'history', label: '🍳 Cook History' },
         ].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)} style={{
-            flex: 1, padding: '10px 4px', fontSize: 12, fontWeight: subTab === t.key ? 600 : 400,
+            flex: 1, padding: '10px 2px', fontSize: 11, fontWeight: subTab === t.key ? 600 : 400,
             color: subTab === t.key ? '#10b981' : '#6b7280',
             background: 'none', border: 'none',
             borderBottom: `2px solid ${subTab === t.key ? '#10b981' : 'transparent'}`,
@@ -454,6 +534,302 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
                 ))}
               </div>
             </>
+          )}
+        </>
+      )}
+
+      {/* ── MY CREATIONS TAB ── */}
+      {subTab === 'creations' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: '#111827' }}>
+              My Recipes
+              {userRecipes?.recipes?.length > 0 && (
+                <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 600, background: '#f3f4f6', color: '#6b7280', padding: '2px 8px', borderRadius: 20 }}>
+                  {userRecipes.recipes.length}
+                </span>
+              )}
+            </div>
+            <button onClick={() => { setEditingCreation(null); setShowCreateSheet(true); }} style={{
+              height: 36, padding: '0 14px', borderRadius: 10, border: 'none',
+              background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}>+ Create Recipe</button>
+          </div>
+
+          {(!userRecipes?.recipes?.length) ? (
+            <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>✍️</div>
+              <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 4 }}>You haven't created any recipes yet.</div>
+              <div style={{ fontSize: 13, marginBottom: 20 }}>Share your cooking with the world.</div>
+              <button onClick={() => { setEditingCreation(null); setShowCreateSheet(true); }} style={{
+                fontSize: 14, fontWeight: 600, padding: '10px 24px', borderRadius: 10,
+                background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+              }}>+ Create Your First Recipe</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {userRecipes.recipes.map(recipe => {
+                const isExpanded = expandedCreationId === recipe.id;
+                const scale = creationServings && recipe.baseServings ? creationServings / recipe.baseServings : 1;
+                const isDeleting = deletingCreationId === recipe.id;
+                const isChangingVis = changingVisId === recipe.id;
+
+                return (
+                  <div key={recipe.id} style={{ background: '#fff', border: '1px solid #f0f0f0', borderRadius: 14, overflow: 'hidden' }}>
+                    {/* Collapsed header */}
+                    <div onClick={() => {
+                      setExpandedCreationId(prev => prev === recipe.id ? null : recipe.id);
+                      setDeletingCreationId(null);
+                      setChangingVisId(null);
+                    }} style={{ padding: '12px 14px', cursor: 'pointer' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', flex: 1, marginRight: 8 }}>{recipe.title}</div>
+                        <VisibilityBadge v={recipe.visibility} />
+                      </div>
+                      {recipe.dietaryTags?.length > 0 && (
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+                          {recipe.dietaryTags.slice(0, 3).map(tag => (
+                            <span key={tag} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 10, background: '#f0fdf4', color: '#065f46' }}>{tag}</span>
+                          ))}
+                          {recipe.dietaryTags.length > 3 && (
+                            <span style={{ fontSize: 10, color: '#9ca3af' }}>+{recipe.dietaryTags.length - 3}</span>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 10, fontSize: 12, color: '#6b7280', flexWrap: 'wrap' }}>
+                        {recipe.cookTime && <span>⏱ {recipe.cookTime}</span>}
+                        {recipe.difficulty && <span style={{ color: recipe.difficulty === 'Easy' ? '#10b981' : recipe.difficulty === 'Medium' ? '#f59e0b' : '#ef4444' }}>{recipe.difficulty}</span>}
+                        <span>❤️ {recipe.savedCount || 0}</span>
+                        <span>👨‍🍳 {recipe.madeCount || 0}</span>
+                        {recipe.ratingCount > 0 && <span>⭐ {(recipe.avgRating || 0).toFixed(1)}</span>}
+                      </div>
+                    </div>
+
+                    {/* Expanded content */}
+                    {isExpanded && (
+                      <div style={{ borderTop: '1px solid #f0f0f0', padding: '14px 14px' }}>
+                        {/* Photo */}
+                        {recipe.photo && (
+                          <img src={recipe.photo} alt={recipe.title} style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 10, marginBottom: 14, display: 'block' }} />
+                        )}
+
+                        {/* Description */}
+                        {recipe.description && (
+                          <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12, lineHeight: 1.5 }}>{recipe.description}</p>
+                        )}
+
+                        {/* Portion scaler */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, background: '#f9fafb', borderRadius: 10, padding: '8px 12px' }}>
+                          <span style={{ fontSize: 12, color: '#6b7280', flex: 1 }}>Servings</span>
+                          <button onClick={() => setCreationServings(s => Math.max(1, (s || recipe.baseServings) - 1))} style={{
+                            width: 28, height: 28, borderRadius: 8, border: '1px solid #e5e7eb',
+                            background: '#fff', fontSize: 16, cursor: 'pointer', fontFamily: 'inherit',
+                          }}>−</button>
+                          <span style={{ fontSize: 14, fontWeight: 600, minWidth: 24, textAlign: 'center' }}>{creationServings || recipe.baseServings}</span>
+                          <button onClick={() => setCreationServings(s => (s || recipe.baseServings) + 1)} style={{
+                            width: 28, height: 28, borderRadius: 8, border: '1px solid #e5e7eb',
+                            background: '#fff', fontSize: 16, cursor: 'pointer', fontFamily: 'inherit',
+                          }}>+</button>
+                        </div>
+
+                        {/* Ingredients */}
+                        {recipe.ingredients?.length > 0 && (
+                          <div style={{ marginBottom: 14 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>INGREDIENTS</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              {recipe.ingredients.map((ing, i) => (
+                                <div key={i} style={{ fontSize: 13, color: '#374151', display: 'flex', gap: 6 }}>
+                                  <span style={{ color: '#9ca3af', minWidth: 60 }}>{fmtAmount(ing.amount * scale)} {ing.unit}</span>
+                                  <span>{ing.name}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Steps */}
+                        {recipe.steps?.length > 0 && (
+                          <div style={{ marginBottom: 16 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>INSTRUCTIONS</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              {recipe.steps.map((step, i) => (
+                                <div key={i} style={{ display: 'flex', gap: 8 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: '#10b981', minWidth: 20 }}>{i + 1}.</span>
+                                  <span style={{ fontSize: 13, color: '#374151', lineHeight: 1.5 }}>{step}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Creator controls */}
+                        <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 12, marginBottom: 14 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>CREATOR CONTROLS</div>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            <button onClick={() => { setEditingCreation(recipe); setShowCreateSheet(true); }} style={{
+                              fontSize: 12, fontWeight: 500, padding: '6px 12px', borderRadius: 8,
+                              border: '1px solid #e5e7eb', background: '#fff', color: '#374151',
+                              cursor: 'pointer', fontFamily: 'inherit',
+                            }}>✏️ Edit Recipe</button>
+                            <button onClick={() => { setChangingVisId(isChangingVis ? null : recipe.id); setDeletingCreationId(null); }} style={{
+                              fontSize: 12, fontWeight: 500, padding: '6px 12px', borderRadius: 8,
+                              border: '1px solid #e5e7eb', background: isChangingVis ? '#f0fdf4' : '#fff', color: '#374151',
+                              cursor: 'pointer', fontFamily: 'inherit',
+                            }}>🔄 Change Visibility</button>
+                            <button onClick={() => { setDeletingCreationId(isDeleting ? null : recipe.id); setChangingVisId(null); }} style={{
+                              fontSize: 12, fontWeight: 500, padding: '6px 12px', borderRadius: 8,
+                              border: '1px solid #fecaca', background: '#fff', color: '#ef4444',
+                              cursor: 'pointer', fontFamily: 'inherit',
+                            }}>🗑 Delete</button>
+                          </div>
+
+                          {isChangingVis && (
+                            <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {[
+                                { key: 'private', label: '🔒 Private' },
+                                ...(hh ? [{ key: 'household', label: '🏠 Household' }] : []),
+                                { key: 'community', label: '🌍 Community' },
+                              ].map(opt => (
+                                <button key={opt.key} onClick={async () => {
+                                  await userRecipes.toggleVisibility(recipe.id, opt.key);
+                                  setChangingVisId(null);
+                                  toast.show(`Visibility changed to ${opt.key}`, 'success');
+                                }} style={{
+                                  fontSize: 12, fontWeight: recipe.visibility === opt.key ? 700 : 400,
+                                  padding: '5px 10px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+                                  border: `1px solid ${recipe.visibility === opt.key ? '#10b981' : '#e5e7eb'}`,
+                                  background: recipe.visibility === opt.key ? '#f0fdf4' : '#fff',
+                                  color: recipe.visibility === opt.key ? '#065f46' : '#374151',
+                                }}>{opt.label}</button>
+                              ))}
+                            </div>
+                          )}
+
+                          {isDeleting && (
+                            <div style={{ marginTop: 10, padding: '10px 12px', background: '#fef2f2', borderRadius: 10 }}>
+                              <div style={{ fontSize: 13, color: '#374151', marginBottom: 8 }}>Delete "{recipe.title}"? This cannot be undone.</div>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <button onClick={() => setDeletingCreationId(null)} style={{
+                                  flex: 1, height: 36, borderRadius: 8, border: '1px solid #e5e7eb',
+                                  background: '#fff', color: '#374151', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+                                }}>Cancel</button>
+                                <button onClick={async () => {
+                                  await userRecipes.deleteRecipe(recipe.id);
+                                  setDeletingCreationId(null);
+                                  setExpandedCreationId(null);
+                                  toast.show('Recipe deleted', 'info');
+                                }} style={{
+                                  flex: 1, height: 36, borderRadius: 8, border: 'none',
+                                  background: '#ef4444', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                                }}>Delete</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Comments section */}
+                        {recipe.allowComments && recipe.visibility !== 'private' && (
+                          <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 12, marginBottom: 14 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>
+                              COMMENTS {creationComments.length > 0 && `(${creationComments.length})`}
+                            </div>
+                            {commentsLoading ? (
+                              <div style={{ display: 'flex', justifyContent: 'center', padding: '16px 0' }}><Spinner size={20} /></div>
+                            ) : (
+                              <>
+                                {creationComments.length === 0 && (
+                                  <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 10 }}>No comments yet. Be the first!</div>
+                                )}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                                  {creationComments.map(c => (
+                                    <div key={c.id} style={{ background: '#f9fafb', borderRadius: 10, padding: '8px 10px' }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                          <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#10b981', color: '#fff', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                            {(c.authorName || 'A').charAt(0).toUpperCase()}
+                                          </div>
+                                          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>{c.authorName || 'Anonymous'}</span>
+                                          <span style={{ fontSize: 11, color: '#9ca3af' }}>{fmtCommentDate(c.createdAt)}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                          <button onClick={() => handleLikeComment(recipe.id, c.id, c.likedBy || [])} style={{
+                                            fontSize: 11, color: (c.likedBy || []).includes(uid) ? '#ef4444' : '#9ca3af',
+                                            background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: '0 2px',
+                                          }}>♥ {c.likes || 0}</button>
+                                          {c.authorUid === uid && (
+                                            <button onClick={async () => {
+                                              await userRecipes.deleteComment(recipe.id, c.id);
+                                              setCreationComments(prev => prev.filter(x => x.id !== c.id));
+                                            }} style={{ fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: '0 2px' }}>
+                                              Delete
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.4 }}>{c.text}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div style={{ display: 'flex', gap: 6 }}>
+                                  <input value={commentText} onChange={e => setCommentText(e.target.value)}
+                                    onKeyDown={e => e.key === 'Enter' && handlePostComment(recipe.id)}
+                                    placeholder="Add a comment..."
+                                    style={{ flex: 1, height: 36, border: '1px solid #e5e7eb', borderRadius: 8, padding: '0 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
+                                  <button onClick={() => handlePostComment(recipe.id)} disabled={!commentText.trim()} style={{
+                                    height: 36, padding: '0 12px', borderRadius: 8, border: 'none',
+                                    background: commentText.trim() ? '#10b981' : '#d1d5db', color: '#fff',
+                                    fontSize: 13, fontWeight: 600, cursor: commentText.trim() ? 'pointer' : 'default', fontFamily: 'inherit',
+                                  }}>Post</button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {recipe.allowComments === false && recipe.visibility !== 'private' && (
+                          <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 12, marginBottom: 14 }}>
+                            <div style={{ fontSize: 12, color: '#9ca3af' }}>
+                              Comments are turned off for this recipe.{' '}
+                              <button onClick={() => userRecipes.updateRecipe(recipe.id, { allowComments: true }).then(() => toast.show('Comments enabled', 'success'))} style={{
+                                fontSize: 12, color: '#10b981', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+                              }}>Turn On Comments</button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Stats */}
+                        <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 12, display: 'flex', gap: 16 }}>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: '#111827' }}>{recipe.madeCount || 0}</div>
+                            <div style={{ fontSize: 10, color: '#9ca3af' }}>Made It</div>
+                          </div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: '#111827' }}>{recipe.savedCount || 0}</div>
+                            <div style={{ fontSize: 10, color: '#9ca3af' }}>Saved</div>
+                          </div>
+                          {recipe.ratingCount > 0 && (
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ fontSize: 18, fontWeight: 700, color: '#111827' }}>⭐ {(recipe.avgRating || 0).toFixed(1)}</div>
+                              <div style={{ fontSize: 10, color: '#9ca3af' }}>{recipe.ratingCount} rating{recipe.ratingCount !== 1 ? 's' : ''}</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {showCreateSheet && (
+            <CreateRecipeSheet
+              onClose={() => { setShowCreateSheet(false); setEditingCreation(null); }}
+              onSave={handleCreationSave}
+              editRecipe={editingCreation}
+              toast={toast}
+              household={household}
+            />
           )}
         </>
       )}
