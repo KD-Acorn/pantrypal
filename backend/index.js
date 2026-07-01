@@ -150,8 +150,8 @@ function parseMealDBIngredients(meal) {
       const raw = amountMatch[1];
       amount = raw.includes('/') ? eval(raw) : parseFloat(raw) || 1;
     }
-    const unit = measure.replace(/^[\d.\/]+\s*/, '').trim().toLowerCase() || 'whole';
-    out.push({ amount: Math.round(amount * 100) / 100, unit, name: name.toLowerCase() });
+    const rawUnit = measure.replace(/^[\d.\/]+\s*/, '').trim() || 'whole';
+    out.push({ amount: Math.round(amount * 100) / 100, unit: normalizeUnit(rawUnit), name: name.toLowerCase() });
   }
   return out;
 }
@@ -262,6 +262,66 @@ function stripHtml(str) {
   return (str || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim();
 }
 
+const UNIT_MAP = {
+  'pch': 'pinch', 'dsh': 'dash',
+  'tbs': 'tbsp', 'tbl': 'tbsp', 'T': 'tbsp',
+  't': 'tsp',
+  'c': 'cup', 'C': 'cup',
+  'lbs': 'lb',
+  'l': 'l', 'L': 'l',
+  'sm': 'small', 'sml': 'small',
+  'med': 'medium',
+  'lg': 'large', 'lrg': 'large',
+  'pkg': 'package', 'env': 'envelope',
+  'cn': 'can',
+  'pt': 'pint', 'qt': 'quart', 'gal': 'gallon',
+};
+
+function normalizeUnit(unit) {
+  const raw = unit?.trim() || '';
+  if (!raw) return 'item';
+  return UNIT_MAP[raw] || UNIT_MAP[raw.toLowerCase()] || raw.toLowerCase();
+}
+
+function isValidRecipe(recipe) {
+  if (!recipe.title || recipe.title.length < 3) return false;
+  if (!recipe.ingredients || recipe.ingredients.length < 2) return false;
+  if (!recipe.steps || recipe.steps.length < 2) return false;
+  if (!recipe.thumbnail) return false;
+
+  const allStepText = recipe.steps.join(' ');
+  const nonLatin = allStepText.match(/[^\x00-\x7F]/g) || [];
+  if (nonLatin.length > allStepText.length * 0.2) return false;
+
+  const avgStepLength = allStepText.length / recipe.steps.length;
+  if (avgStepLength < 20) return false;
+
+  return true;
+}
+
+function cleanSpoonacularDescription(summary, title, cuisine, cookTime, difficulty, ingredients) {
+  if (!summary) {
+    const top3 = (ingredients || []).slice(0, 3).map(i => i.name).join(', ');
+    return `${cuisine || 'Homestyle'} recipe featuring ${top3 || 'fresh ingredients'}. Ready in ${cookTime || '30 min'} and ${(difficulty || 'Medium').toLowerCase()} to make.`;
+  }
+
+  let clean = stripHtml(summary);
+  clean = clean.replace(/The recipe .+? can be made in about \d+ minutes\.?\s*/i, '');
+  clean = clean.replace(/For \$[\d.]+ per serving,.*?\./i, '');
+  clean = clean.replace(/Watching your figure\?.*?\./i, '');
+  clean = clean.replace(/This recipe makes \d+ servings.*?\./i, '');
+  clean = clean.replace(/It will be a hit at your.*?\./i, '');
+
+  const sentences = clean.split(/\.(?:\s+|$)/).filter(s => s.trim().length > 20);
+  const result = sentences.slice(0, 2).join('. ').trim() + (sentences.length > 0 ? '.' : '');
+
+  if (!result || result.length < 20) {
+    const top3 = (ingredients || []).slice(0, 3).map(i => i.name).join(', ');
+    return `${cuisine || 'Homestyle'} recipe featuring ${top3 || 'fresh ingredients'}. Ready in ${cookTime || '30 min'} and ${(difficulty || 'Medium').toLowerCase()} to make.`;
+  }
+  return result;
+}
+
 // ── Edamam Recipe Search ────────────────────────────────────────────────────
 async function searchEdamam(filteredIngredients, pantryNames, needed) {
   const appId = process.env.EDAMAM_APP_ID;
@@ -281,7 +341,7 @@ async function searchEdamam(filteredIngredients, pantryNames, needed) {
       if (!r) continue;
       const ingredients = (r.ingredients || []).map(i => ({
         amount: Math.round((i.quantity || 1) * 100) / 100,
-        unit: i.measure === '<unit>' ? 'whole' : (i.measure || 'whole').toLowerCase(),
+        unit: normalizeUnit(i.measure === '<unit>' ? 'whole' : (i.measure || 'whole')),
         name: (i.food || '').toLowerCase(),
       }));
       const { score: matchScore } = calcMatchScore(ingredients, pantryNames);
@@ -371,30 +431,34 @@ async function searchSpoonacular(filteredIngredients, pantryNames, needed) {
       if (!recipe) continue;
       const ingredients = (recipe.extendedIngredients || []).map(i => ({
         amount: Math.round((i.amount || 1) * 100) / 100,
-        unit: i.unit || 'whole',
+        unit: normalizeUnit(i.unit || 'whole'),
         name: (i.name || '').toLowerCase(),
       }));
       const { score: matchScore } = calcMatchScore(ingredients, pantryNames);
       if (matchScore < 20) continue;
       const missing = calcMissing(ingredients, pantryNames);
       const mins = recipe.readyInMinutes || 30;
+      const difficulty = mins <= 20 ? 'Easy' : mins <= 45 ? 'Medium' : 'Hard';
+      const cookTime = `${mins} min`;
+      const cuisine = recipe.cuisines?.[0] || recipe.dishTypes?.[0] || 'International';
       const steps = recipe.analyzedInstructions?.[0]?.steps?.map(s => s.step) || [];
-      const desc = stripHtml(recipe.summary || '').slice(0, 200);
+      const thumbnail = (recipe.image || '').replace('312x231', '556x370') || null;
+      const desc = cleanSpoonacularDescription(recipe.summary, recipe.title, cuisine, cookTime, difficulty, ingredients);
 
       recipes.push({
         title: recipe.title,
-        description: desc + (desc.length >= 200 ? '...' : ''),
-        cookTime: `${mins} min`,
-        difficulty: mins <= 20 ? 'Easy' : mins <= 45 ? 'Medium' : 'Hard',
+        description: desc,
+        cookTime,
+        difficulty,
         matchScore,
         missingIngredients: missing,
-        cuisine: recipe.cuisines?.[0] || recipe.dishTypes?.[0] || 'International',
+        cuisine,
         baseServings: recipe.servings || 4,
         ingredients,
         steps,
         source: 'spoonacular',
         sourceLabel: null,
-        thumbnail: (recipe.image || '').replace('312x231', '556x370') || null,
+        thumbnail,
         spoonacularId: recipe.id,
       });
     }
@@ -404,6 +468,64 @@ async function searchSpoonacular(filteredIngredients, pantryNames, needed) {
     return recipes;
   } catch (err) {
     console.error('[Spoonacular] Error:', err.message);
+    return [];
+  }
+}
+
+async function searchTasty(filteredIngredients, pantryNames, needed) {
+  const apiKey = process.env.RAPIDAPI_KEY;
+  if (!apiKey || needed <= 0) {
+    if (!apiKey) console.log('[Recipes] Tasty API not configured — skipping');
+    return [];
+  }
+
+  try {
+    const url = `https://tasty.p.rapidapi.com/recipes/list?from=0&size=${needed * 2}&q=${encodeURIComponent(filteredIngredients.join(' '))}`;
+    const resp = await fetchWithTimeout(url, 5000);
+    if (!resp.ok) { console.error('[Tasty] Search error:', resp.status); return []; }
+    const data = await resp.json();
+    const results = data.results || [];
+
+    const recipes = [];
+    for (const recipe of results) {
+      const ingredients = (recipe.sections?.[0]?.components || []).map(c => ({
+        amount: parseFloat(c.measurements?.[0]?.quantity) || 1,
+        unit: normalizeUnit(c.measurements?.[0]?.unit?.name || 'item'),
+        name: (c.ingredient?.name || c.raw_text || '').toLowerCase(),
+      })).filter(i => i.name);
+
+      const { score: matchScore } = calcMatchScore(ingredients, pantryNames);
+      const missing = calcMissing(ingredients, pantryNames);
+      const mins = recipe.total_time_minutes || 30;
+      const difficulty = recipe.difficulty || (mins <= 20 ? 'Easy' : mins <= 45 ? 'Medium' : 'Hard');
+      const cookTime = `${mins} min`;
+      const cuisine = recipe.cuisine?.name || 'International';
+      const steps = (recipe.instructions || []).map(i => i.display_text).filter(Boolean);
+      const thumbnail = recipe.thumbnail_url || null;
+
+      recipes.push({
+        title: recipe.name,
+        description: recipe.description || '',
+        cookTime,
+        difficulty,
+        matchScore,
+        missingIngredients: missing,
+        cuisine,
+        baseServings: recipe.num_servings || 4,
+        ingredients,
+        steps,
+        source: 'tasty',
+        sourceLabel: null,
+        thumbnail,
+        tastyId: recipe.id,
+      });
+    }
+
+    recipes.sort((a, b) => b.matchScore - a.matchScore);
+    console.log('[Recipes] Tasty returned:', recipes.length, 'recipes');
+    return recipes;
+  } catch (err) {
+    console.error('[Tasty] Error:', err.message);
     return [];
   }
 }
@@ -461,6 +583,7 @@ async function searchCatalog(ingredientNames, excludeIds, limit) {
           thumbnail: data.thumbnail || null,
           spoonacularId: data.spoonacularId || null,
           mealDbId: data.mealDbId || null,
+          tastyId: data.tastyId || null,
           catalogId: doc.id,
           nutrition: data.nutrition || null,
           sourceUrl: data.sourceUrl || null,
@@ -479,9 +602,14 @@ async function saveToCatalog(recipes, source) {
   if (!adminDb) return;
   for (const r of recipes) {
     try {
+      if (!isValidRecipe(r)) {
+        console.log('[Catalog] Rejected low-quality recipe:', r.title);
+        continue;
+      }
       const docId = source === 'spoonacular' ? String(r.spoonacularId)
         : source === 'themealdb' ? `mdb_${r.mealDbId}`
         : source === 'edamam' && r.edamamId ? `edm_${r.edamamId.split('#recipe_')[1] || r.edamamId.slice(-12)}`
+        : source === 'tasty' && r.tastyId ? `tst_${r.tastyId}`
         : null;
       if (!docId) continue;
 
@@ -498,6 +626,7 @@ async function saveToCatalog(recipes, source) {
           source,
           spoonacularId: r.spoonacularId || null,
           mealDbId: r.mealDbId || null,
+          tastyId: r.tastyId || null,
           title: r.title,
           description: r.description || '',
           cookTime: r.cookTime || '',
@@ -547,14 +676,15 @@ app.post('/api/recipes', async (req, res) => {
     } else {
       console.log('[Recipes] Catalog miss — fetching from APIs');
 
-      // Tier 1 + 1.5: TheMealDB and Edamam in parallel (both free)
-      const [dbRaw, edamamRaw] = await Promise.all([
+      // Tier 1: TheMealDB and Tasty in parallel (both free)
+      const filteredIngredients = searchTerms;
+      const [dbRaw, tastyRaw] = await Promise.all([
         searchTheMealDB(searchTerms, pantryNames).catch(err => {
           console.error('[Recipes] TheMealDB failed:', err.message);
           return [];
         }),
-        searchEdamam(searchTerms, pantryNames, TARGET).catch(err => {
-          console.error('[Recipes] Edamam failed:', err.message);
+        searchTasty(filteredIngredients, pantryNames, TARGET).catch(err => {
+          console.error('[Recipes] Tasty failed:', err.message);
           return [];
         }),
       ]);
@@ -563,13 +693,25 @@ app.post('/api/recipes', async (req, res) => {
       console.log('[Recipes] TheMealDB returned:', dbRecipes.length, 'recipes');
 
       const seenTitles = new Set(dbRecipes.map(r => r.title.toLowerCase()));
-      let edamamRecipes = edamamRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - dbRecipes.length);
-      edamamRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
-      console.log('[Recipes] Edamam returned:', edamamRecipes.length, 'recipes');
+      let tastyRecipes = tastyRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - dbRecipes.length);
+      tastyRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
 
-      // Tier 2: Spoonacular only if free tiers didn't fill enough
+      // Tier 1.5: Edamam for any remaining slots
+      const afterTier1 = dbRecipes.length + tastyRecipes.length;
+      let edamamRecipes = [];
+      if (afterTier1 < TARGET) {
+        const edamamRaw = await searchEdamam(searchTerms, pantryNames, TARGET - afterTier1).catch(err => {
+          console.error('[Recipes] Edamam failed:', err.message);
+          return [];
+        });
+        edamamRecipes = edamamRaw.filter(r => !seenTitles.has(r.title.toLowerCase())).slice(0, TARGET - afterTier1);
+        edamamRecipes.forEach(r => seenTitles.add(r.title.toLowerCase()));
+        console.log('[Recipes] Edamam returned:', edamamRecipes.length, 'recipes');
+      }
+
+      // Tier 2: Spoonacular only if combined free results < 3 (conserve daily points)
       let spoonRecipes = [];
-      const freeCount = dbRecipes.length + edamamRecipes.length;
+      const freeCount = dbRecipes.length + tastyRecipes.length + edamamRecipes.length;
       if (freeCount < 3) {
         const spoonRaw = await searchSpoonacular(searchTerms, pantryNames, TARGET - freeCount).catch(err => {
           console.error('[Recipes] Spoonacular failed:', err.message);
@@ -582,13 +724,14 @@ app.post('/api/recipes', async (req, res) => {
 
       // Save all API results to catalog (background, don't await)
       saveToCatalog(dbRecipes, 'themealdb').catch(() => {});
+      saveToCatalog(tastyRecipes, 'tasty').catch(() => {});
       saveToCatalog(edamamRecipes, 'edamam').catch(() => {});
       saveToCatalog(spoonRecipes, 'spoonacular').catch(() => {});
 
       // Combine catalog partial hits with fresh API results, deduplicate
       const combined = [...catalogHits];
       const usedTitles = new Set(combined.map(r => r.title.toLowerCase()));
-      for (const r of [...dbRecipes, ...edamamRecipes, ...spoonRecipes]) {
+      for (const r of [...dbRecipes, ...tastyRecipes, ...edamamRecipes, ...spoonRecipes]) {
         if (!usedTitles.has(r.title.toLowerCase())) {
           usedTitles.add(r.title.toLowerCase());
           combined.push(r);
