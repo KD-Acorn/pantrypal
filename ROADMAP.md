@@ -260,3 +260,28 @@ This document tracks every planned, in-progress, and completed feature for My Pa
 - [ ] Social sharing — share a recipe card as an image to Instagram/TikTok
 - [ ] Cooking mode — fullscreen step-by-step with screen-stay-awake lock
 - [ ] Video recipe links — attach a YouTube link to any recipe card
+
+---
+## 🔜 Chef Sponsor + Cookbook Marketplace
+
+- [ ] Chef verified sponsor program
+- [ ] Cookbook upload (collection of recipes)
+- [ ] Per-cookbook microtransaction purchase
+- [ ] Purchased recipes unlock permanently per user
+- [ ] Creator revenue share per sale
+- [ ] Admin: chef applications, cookbook management, sales analytics
+- [ ] User cookbook library (purchased cookbooks)
+
+## 🔜 User-Submitted Original Recipes
+
+- [ ] "Create Recipe" flow from scratch
+- [ ] Private / Household / Community visibility choice
+- [ ] Comments toggle per recipe
+- [ ] Creator recipe catalog (track submissions, Made It count, comments, ratings)
+- [ ] Submitted recipes feed into community feed
+
+## 🐛 Known Bugs
+
+- [ ] Barcode scanner — items not registering when scanned
+      Camera opens but scan result returns empty or fails silently
+      Needs: test with pm2 logs during scan attempt to find error
