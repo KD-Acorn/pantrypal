@@ -1,7 +1,6 @@
 import { useState, useRef } from 'react';
 import Spinner from '../components/Spinner';
 import RecipeCard from '../components/RecipeCard';
-import RateLimitModal from '../components/RateLimitModal';
 import { trackEvent } from '../utils/analytics';
 import MadeItSheet from '../components/MadeItSheet';
 import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
@@ -31,8 +30,6 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
   const [madeItRecipe, setMadeItRecipe] = useState(null);
   const [madeItPortions, setMadeItPortions] = useState(2);
   const [customizeRecipe, setCustomizeRecipe] = useState(null);
-  const [limitModal, setLimitModal] = useState(null);
-
   const [sessionDietaryOverrides, setSessionDietaryOverrides] = useState(null);
   const [filterCuisine, setFilterCuisine] = useState('Any');
   const [filterTime, setFilterTime] = useState('any');
@@ -61,10 +58,6 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
   async function fetchRecipes(idx) {
     if (pantry.items.length === 0) {
       toast.show('Add ingredients to your pantry first', 'info');
-      return;
-    }
-    if (rateLimit && !rateLimit.canUse('recipe_generate')) {
-      setLimitModal({ feature: 'recipe_generate', limit: 5 });
       return;
     }
     setLoading(true);
@@ -268,7 +261,6 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
                 onCustomize={(recipe) => setCustomizeRecipe(recipe)}
                 mode="discover"
                 settings={settings}
-                rateLimit={rateLimit ? { ...rateLimit, showLimitModal: (f) => setLimitModal({ feature: f, limit: 10 }) } : null}
                 cookHistory={cookHistory}
                 onAddToPantry={(name) => { pantry.add([{ name, quantity: 1, unit: 'item' }]); toast.show(`✓ ${name} added to pantry`, 'success'); }}
                 onAddToGrocery={(name) => { grocery?.addItem({ name, quantity: 1, unit: 'item', source: 'recipe_missing' }); toast.show(`🛒 ${name} added to grocery list`, 'success'); }}
@@ -305,9 +297,6 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
           toast={toast}
           saved={saved}
         />
-      )}
-      {limitModal && (
-        <RateLimitModal feature={limitModal.feature} limit={limitModal.limit} onClose={() => setLimitModal(null)} />
       )}
     </div>
   );

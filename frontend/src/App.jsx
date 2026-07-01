@@ -19,11 +19,9 @@ import useHouseholdPantry from './hooks/useHouseholdPantry';
 import useHouseholdRecipes from './hooks/useHouseholdRecipes';
 import useHouseholdMealPlan from './hooks/useHouseholdMealPlan';
 import ScanPage from './pages/ScanPage';
-import MealPlanPage from './pages/MealPlanPage';
 import SettingsPage from './pages/SettingsPage';
 import PantryPage from './pages/PantryPage';
 import RecipesPage from './pages/RecipesPage';
-import GroceryPage from './pages/GroceryPage';
 import DiscoverPage from './pages/DiscoverPage';
 import AuthPage from './pages/AuthPage';
 import BugReportButton from './components/BugReportButton';
@@ -195,10 +193,8 @@ function AppContent() {
       <UserHeader onOpenSettings={() => setShowSettings(true)} householdName={household.household?.name} />
       <MigrationBanner uid={uid} toast={toast} />
       {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} grocery={grocery} rateLimit={rateLimit} />}
-      {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} household={household} householdPantry={householdPantry} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} />}
-      {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} household={household} householdRecipes={householdRecipes} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} />}
-      {tab === 'grocery' && <GroceryPage grocery={grocery} pantry={pantry} saved={saved} toast={toast} />}
-      {tab === 'mealplan' && <MealPlanPage mealPlan={mealPlan} saved={saved} pantry={pantry} grocery={grocery} toast={toast} household={household} householdMealPlan={householdMealPlan} householdRecipes={householdRecipes} displayName={settings.displayName || currentUser?.displayName || ''} />}
+      {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} household={household} householdPantry={householdPantry} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} grocery={grocery} saved={saved} />}
+      {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} household={household} householdRecipes={householdRecipes} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} mealPlan={mealPlan} householdMealPlan={householdMealPlan} />}
       {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} grocery={grocery} />}
       <BugReportButton uid={uid} currentTab={tab} toast={toast} />
       <Toast toast={toast.toast} />

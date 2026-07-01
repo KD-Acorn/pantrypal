@@ -59,13 +59,19 @@ app.post('/api/scan', async (req, res) => {
       },
       body: JSON.stringify({
         model: 'gpt-4o',
-        max_tokens: 500,
+        max_tokens: 600,
         messages: [{
           role: 'user',
           content: [
             {
               type: 'text',
-              text: 'List every food ingredient visible in this image. Return ONLY a JSON array of strings. Example: ["eggs","milk","cheddar cheese"]',
+              text: `List every food ingredient visible in this image. For each item:
+- If you can count individual items, return that count as quantity
+- If you see a package, try to read the size from the label
+- Assign the most logical unit: 'item' for whole fruits/vegetables you can count, 'bottle' for bottles, 'can' for cans, 'bag' for bags, 'box' for boxes, 'bunch' for herbs or bananas, 'lb' or 'oz' if weight is visible on packaging
+- Default to quantity 1 if count is unclear
+Examples: 3 visible apples → {"name":"apples","quantity":3,"unit":"item"}, a bag of rice with '5 lb' visible → {"name":"rice","quantity":5,"unit":"lb"}, a 6-pack of beer → {"name":"beer","quantity":6,"unit":"can"}
+Return ONLY a JSON array of objects with name, quantity, unit. No markdown, no preamble.`,
             },
             {
               type: 'image_url',
@@ -85,8 +91,11 @@ app.post('/api/scan', async (req, res) => {
     const data = await response.json();
     const raw = data.choices?.[0]?.message?.content || '[]';
     const cleaned = raw.replace(/```json|```/g, '').trim();
-    const ingredients = JSON.parse(cleaned);
-    res.json({ ingredients: Array.isArray(ingredients) ? ingredients : [] });
+    const parsed = JSON.parse(cleaned);
+    const ingredients = Array.isArray(parsed) ? parsed.map(i =>
+      typeof i === 'string' ? i : (i.name ? i : null)
+    ).filter(Boolean) : [];
+    res.json({ ingredients });
   } catch (err) {
     console.error('Scan error:', err);
     res.status(500).json({ error: 'Ingredient scan failed' });
@@ -741,14 +750,20 @@ Strip all non-food line items including: prices, subtotals, tax, store name, add
 For each food item:
 - Clean up abbreviations and shorthand into full readable names (e.g. 'BRDCRMB' → 'bread crumbs', 'CHKN BRST BNL' → 'boneless chicken breast')
 - Use the store name to help decode store-specific abbreviations if known
-- Extract quantity if visible on the receipt (e.g. '2x', 'x3'), default to 1 if not shown
-- Assign a sensible unit based on the item type: use 'item' for whole goods, 'lb' if weight is shown, 'oz' if ounce quantity shown, 'pack' for multi-packs, 'bag' for bagged goods, 'box' for boxed goods
+- Extract quantity if shown (2x, x2, 2 @ = quantity 2), default to 1 if not shown
+- Extract weight if shown (0.73 lb, 1.2 kg = that weight and unit)
+- For multi-packs in the name (12PK, 6PACK, 24CT): extract the count as quantity and set unit to 'can', 'bottle', or 'item'. Examples:
+    'CORONA 12PK' → name: 'Corona', quantity: 12, unit: 'can'
+    'EGGS 18CT' → name: 'Eggs', quantity: 18, unit: 'item'
+    'CHICKEN BREAST 1.73LB' → name: 'Chicken Breast', quantity: 1.73, unit: 'lb'
+    'MILK 1GAL' → name: 'Milk', quantity: 1, unit: 'gallon'
+- Assign a sensible unit: 'item' for whole goods, 'lb' if weight shown, 'oz' if ounces shown, 'can' for canned goods, 'bottle' for bottles, 'bag' for bagged goods, 'box' for boxed goods
 ${abbrevsContext}
 Return ONLY a valid JSON object in this exact format, no markdown, no preamble:
 {
   "detectedStore": "store name or null",
   "ingredients": [
-    { "name": "boneless chicken breast", "quantity": 1, "unit": "lb" }
+    { "name": "boneless chicken breast", "quantity": 1.73, "unit": "lb" }
   ]
 }`;
 
@@ -821,6 +836,52 @@ app.post('/api/store-abbreviations/add', async (req, res) => {
   }
 });
 
+function parseOFFQuantity(quantityStr) {
+  if (!quantityStr) return { quantity: 1, unit: 'item' };
+  const str = quantityStr.toLowerCase().trim();
+
+  // Multi-pack: "12 x 355 ml" or "6 x 12 fl oz"
+  const multiPack = str.match(/^(\d+)\s*x\s*([\d.]+)\s*([a-z\s.]+)/);
+  if (multiPack) {
+    return {
+      quantity: parseInt(multiPack[1]),
+      unit: 'item',
+      itemSize: parseFloat(multiPack[2]),
+      itemUnit: multiPack[3].trim(),
+    };
+  }
+
+  // Single with unit: "355 ml", "1 kg", "24 fl oz"
+  const single = str.match(/^([\d.]+)\s*([a-z\s.]+)/);
+  if (single) {
+    const num = parseFloat(single[1]);
+    const u = single[2].trim();
+    if (u.includes('ml')) return { quantity: num, unit: 'ml' };
+    if (u === 'l' || u === 'litre' || u === 'liter') return { quantity: Math.round(num * 1000), unit: 'ml' };
+    if (u.includes('fl oz') || u.includes('fl. oz')) return { quantity: num, unit: 'fl oz' };
+    if (u.includes('oz')) return { quantity: num, unit: 'oz' };
+    if (u.includes('kg')) return { quantity: num, unit: 'kg' };
+    if (u === 'g' || u === 'gr' || u === 'gram' || u === 'grams') return { quantity: num, unit: 'g' };
+    if (u.includes('lb')) return { quantity: num, unit: 'lb' };
+    return { quantity: num, unit: u };
+  }
+
+  return { quantity: 1, unit: 'item' };
+}
+
+function packagingUnit(packagingStr) {
+  if (!packagingStr) return null;
+  const p = packagingStr.toLowerCase();
+  if (p.includes('can')) return 'can';
+  if (p.includes('bottle')) return 'bottle';
+  if (p.includes('bag')) return 'bag';
+  if (p.includes('box')) return 'box';
+  if (p.includes('jar')) return 'jar';
+  if (p.includes('carton')) return 'carton';
+  if (p.includes('pouch')) return 'pouch';
+  return null;
+}
+
 // ── POST /api/scan-barcode — GPT-4o barcode extraction + Open Food Facts ──────
 app.post('/api/scan-barcode', async (req, res) => {
   const { imageBase64, mimeType } = req.body;
@@ -839,14 +900,8 @@ app.post('/api/scan-barcode', async (req, res) => {
         messages: [{
           role: 'user',
           content: [
-            {
-              type: 'text',
-              text: 'Look at this image and find any barcode or QR code. Return ONLY the barcode number as a plain string with no spaces, dashes, or other characters. If no barcode is found, return null. Example response: 0123456789012',
-            },
-            {
-              type: 'image_url',
-              image_url: { url: `data:${mimeType || 'image/jpeg'};base64,${imageBase64}` },
-            },
+            { type: 'text', text: 'Look at this image and find any barcode or QR code. Return ONLY the barcode number as a plain string with no spaces, dashes, or other characters. If no barcode is found, return null. Example response: 0123456789012' },
+            { type: 'image_url', image_url: { url: `data:${mimeType || 'image/jpeg'};base64,${imageBase64}` } },
           ],
         }],
       }),
@@ -865,6 +920,26 @@ app.post('/api/scan-barcode', async (req, res) => {
       return res.json({ error: 'no_barcode', message: 'No barcode detected. Try better lighting or a clearer angle.' });
     }
 
+    // Check community-verified cache first
+    if (adminDb) {
+      try {
+        const verifiedDoc = await adminDb.collection('verified_products').doc(barcode).get();
+        if (verifiedDoc.exists) {
+          const vd = verifiedDoc.data();
+          if (vd.confirmCount >= 2) {
+            return res.json({
+              ingredients: [{ name: vd.name, quantity: vd.quantity, unit: vd.unit }],
+              productName: vd.originalName,
+              brand: null,
+              barcode,
+              communityVerified: true,
+              itemSize: vd.itemSize || null,
+            });
+          }
+        }
+      } catch (e) { /* non-fatal, fall through to OFF */ }
+    }
+
     const offResp = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
     const offData = await offResp.json();
 
@@ -875,28 +950,78 @@ app.post('/api/scan-barcode', async (req, res) => {
     const product = offData.product || {};
     const productName = product.product_name || product.product_name_en || 'Unknown product';
     const brand = product.brands || null;
+    const pkgUnit = packagingUnit(product.packaging);
 
-    let quantity = 1;
-    let unit = 'item';
-    const qtyStr = product.quantity || '';
-    const qtyMatch = qtyStr.match(/^([\d.]+)\s*(g|kg|ml|l|oz|lb|fl oz)/i);
-    if (qtyMatch) {
-      quantity = parseFloat(qtyMatch[1]);
-      const u = qtyMatch[2].toLowerCase();
-      if (u === 'kg') { quantity = quantity * 1000; unit = 'g'; }
-      else if (u === 'fl oz') { unit = 'oz'; }
-      else { unit = u; }
+    const parsed = parseOFFQuantity(product.quantity);
+    let { quantity, unit, itemSize, itemUnit } = parsed;
+
+    let ingredientName;
+    let resolvedItemSize = null;
+
+    if (itemSize) {
+      if (pkgUnit) unit = pkgUnit;
+      resolvedItemSize = `${itemSize}${itemUnit}`;
+      ingredientName = `${productName} (${quantity} x ${itemSize}${itemUnit})`;
+    } else {
+      if (quantity === 1 && unit === 'item' && pkgUnit) unit = pkgUnit;
+      const sizeLabel = product.quantity ? product.quantity.trim() : null;
+      ingredientName = sizeLabel ? `${productName} (${sizeLabel})` : productName;
+    }
+
+    // Save to verified_products with confirmCount 0 (seeds the cache)
+    if (adminDb) {
+      adminDb.collection('verified_products').doc(barcode).set({
+        barcode,
+        originalName: productName,
+        name: ingredientName,
+        quantity,
+        unit,
+        itemSize: resolvedItemSize,
+        confirmCount: 0,
+        lastConfirmedAt: FieldValue.serverTimestamp(),
+        source: 'open_food_facts',
+      }, { merge: true }).catch(() => {});
     }
 
     res.json({
-      ingredients: [{ name: productName, quantity, unit }],
-      productName,
-      brand,
-      barcode,
+      ingredients: [{ name: ingredientName, quantity, unit }],
+      productName, brand, barcode, itemSize: resolvedItemSize,
     });
   } catch (err) {
     console.error('Barcode scan error:', err);
     res.json({ error: 'scan_failed', message: 'Barcode scan failed. Please try again.' });
+  }
+});
+
+// ── POST /api/scan-barcode/confirm — record user-verified barcode correction ──
+app.post('/api/scan-barcode/confirm', async (req, res) => {
+  const { barcode, originalName, name, quantity, unit, itemSize, uid } = req.body;
+  if (!barcode || !name || !uid) return res.status(400).json({ error: 'barcode, name, uid required' });
+  if (!adminDb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const ref = adminDb.collection('verified_products').doc(barcode);
+    const snap = await ref.get();
+    if (snap.exists) {
+      await ref.update({
+        name, quantity, unit, itemSize: itemSize || null,
+        originalName: originalName || snap.data().originalName,
+        confirmedBy: uid,
+        confirmCount: FieldValue.increment(1),
+        lastConfirmedAt: FieldValue.serverTimestamp(),
+        source: 'user_correction',
+      });
+    } else {
+      await ref.set({
+        barcode, originalName: originalName || name, name, quantity, unit,
+        itemSize: itemSize || null, confirmedBy: uid,
+        confirmCount: 1, lastConfirmedAt: FieldValue.serverTimestamp(),
+        source: 'user_correction',
+      });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Barcode confirm error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

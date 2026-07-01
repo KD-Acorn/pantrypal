@@ -1,28 +1,28 @@
 import { useState } from 'react';
 import Spinner from '../components/Spinner';
-import RateLimitModal from '../components/RateLimitModal';
 import { trackEvent } from '../utils/analytics';
+import { useAuth } from '../context/AuthContext';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
-const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch','pack'];
+const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch','pack','fl oz','gallon'];
 const IMG_ACCEPT = 'image/*,image/jpeg,image/png,image/heic,image/heif';
 const HIDDEN_INPUT = { position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0 };
 function tapLabel(id) { return (e) => { e.preventDefault(); document.getElementById(id)?.click(); }; }
 
 export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
+  const { currentUser } = useAuth();
   const [mode, setMode] = useState('text');
   const [scanSubMode, setScanSubMode] = useState('photo');
   const [textInput, setTextInput] = useState('');
   const [scanning, setScanning] = useState(false);
   const [scanMsg, setScanMsg] = useState('');
   const [preview, setPreview] = useState(null);
+  const [barcodeContext, setBarcodeContext] = useState(null); // { barcode, originalName, itemSize, communityVerified }
   const [storeBanner, setStoreBanner] = useState(null);
   const [barcodeBanner, setBarcodeBanner] = useState(null);
   const [dupeActions, setDupeActions] = useState({});
   const [scanError, setScanError] = useState(null);
   const [barcodeManualInput, setBarcodeManualInput] = useState('');
-  const [limitModal, setLimitModal] = useState(null);
-
   function handleTextAdd() {
     const names = textInput.split(',').map(s => s.trim()).filter(Boolean);
     if (names.length === 0) return;
@@ -48,10 +48,6 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
 
   async function handleImageUpload(file) {
     if (!file) return;
-    if (rateLimit && !rateLimit.canUse('scan_camera')) {
-      setLimitModal({ feature: 'scan_camera', limit: 10 });
-      return;
-    }
     setScanning(true);
     setScanMsg('Analyzing your photo...');
     setStoreBanner(null);
@@ -70,7 +66,12 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
         setScanError('photo');
         return;
       }
-      setPreview(items.map(name => ({ name, quantity: 1, unit: 'item', checked: true })));
+      setPreview(items.map(i =>
+        typeof i === 'string'
+          ? { name: i, quantity: 1, unit: 'item', checked: true }
+          : { name: i.name, quantity: i.quantity || 1, unit: UNITS.includes(i.unit) ? i.unit : 'item', checked: true }
+      ));
+      setBarcodeContext(null);
       setDupeActions({});
       if (rateLimit) rateLimit.increment('scan_camera');
       trackEvent('scan_complete', { type: 'camera', items: items.length });
@@ -84,10 +85,6 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
 
   async function handleReceiptUpload(file) {
     if (!file) return;
-    if (rateLimit && !rateLimit.canUse('scan_receipt')) {
-      setLimitModal({ feature: 'scan_receipt', limit: 5 });
-      return;
-    }
     setScanning(true);
     setScanMsg('Reading receipt...');
     setStoreBanner(null);
@@ -126,10 +123,6 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
 
   async function handleBarcodeUpload(file) {
     if (!file) return;
-    if (rateLimit && !rateLimit.canUse('scan_barcode')) {
-      setLimitModal({ feature: 'scan_barcode', limit: 10 });
-      return;
-    }
     setScanning(true);
     setScanMsg('Scanning barcode...');
     setBarcodeBanner(null);
@@ -168,8 +161,15 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
         name: i.name, quantity: i.quantity || 1,
         unit: UNITS.includes(i.unit) ? i.unit : 'item', checked: true,
       })));
+      setBarcodeContext({
+        barcode: data.barcode,
+        originalName: data.productName,
+        itemSize: data.itemSize || null,
+        communityVerified: data.communityVerified || false,
+        originalItems: items.map(i => ({ name: i.name, quantity: i.quantity || 1, unit: i.unit })),
+      });
       setDupeActions({});
-      setBarcodeBanner({ productName: data.productName, brand: data.brand });
+      setBarcodeBanner({ productName: data.productName, brand: data.brand, communityVerified: data.communityVerified });
       if (rateLimit) rateLimit.increment('scan_barcode');
       trackEvent('scan_complete', { type: 'barcode', items: items.length });
     } catch {
@@ -184,7 +184,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     setPreview(prev => prev.map((p, i) => i === idx ? { ...p, ...changes } : p));
   }
 
-  function confirmPreview() {
+  async function confirmPreview() {
     const toAdd = preview.filter(p => p.checked);
     let added = 0;
     for (const p of toAdd) {
@@ -200,7 +200,34 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
       added++;
     }
     if (added > 0) toast.show(`Added ${added} ingredient${added > 1 ? 's' : ''}`, 'success');
+
+    // Log barcode correction if user edited the scan result
+    if (barcodeContext?.barcode && currentUser?.uid && toAdd.length > 0) {
+      const confirmed = toAdd[0];
+      const original = barcodeContext.originalItems?.[0];
+      const wasEdited = !original ||
+        confirmed.name !== original.name ||
+        confirmed.quantity !== original.quantity ||
+        confirmed.unit !== original.unit;
+      if (wasEdited || !barcodeContext.communityVerified) {
+        fetch(`${API}/api/scan-barcode/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            barcode: barcodeContext.barcode,
+            originalName: barcodeContext.originalName,
+            name: confirmed.name,
+            quantity: confirmed.quantity,
+            unit: confirmed.unit,
+            itemSize: barcodeContext.itemSize || null,
+            uid: currentUser.uid,
+          }),
+        }).catch(() => {});
+      }
+    }
+
     setPreview(null);
+    setBarcodeContext(null);
     setDupeActions({});
     setStoreBanner(null);
   }
@@ -208,7 +235,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
   const checkedCount = preview ? preview.filter(p => p.checked).length : 0;
 
   const tabBtn = (key, label) => (
-    <button onClick={() => { setMode(key); setPreview(null); setStoreBanner(null); setBarcodeBanner(null); setScanError(null); setBarcodeManualInput(''); }} style={{
+    <button onClick={() => { setMode(key); setPreview(null); setBarcodeContext(null); setStoreBanner(null); setBarcodeBanner(null); setScanError(null); setBarcodeManualInput(''); }} style={{
       flex: 1, padding: '10px 0', fontSize: 13, fontWeight: mode === key ? 600 : 400,
       color: mode === key ? '#10b981' : '#6b7280', background: 'none', border: 'none',
       borderBottom: `2px solid ${mode === key ? '#10b981' : 'transparent'}`,
@@ -247,8 +274,15 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
         <div style={{
           background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10,
           padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#166534',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
         }}>
-          📦 Found: <strong>{barcodeBanner.productName}</strong>{barcodeBanner.brand ? ` by ${barcodeBanner.brand}` : ''}
+          <span>📦 Found: <strong>{barcodeBanner.productName}</strong>{barcodeBanner.brand ? ` by ${barcodeBanner.brand}` : ''}</span>
+          {barcodeBanner.communityVerified && (
+            <span title="This product was verified by other My Pantry Club users" style={{
+              fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+              background: '#22c55e', color: '#fff', flexShrink: 0,
+            }}>✓ Community Verified</span>
+          )}
         </div>
       )}
       <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>
@@ -304,7 +338,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
         })}
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => { setPreview(null); setDupeActions({}); setStoreBanner(null); setBarcodeBanner(null); }} style={{
+        <button onClick={() => { setPreview(null); setBarcodeContext(null); setDupeActions({}); setStoreBanner(null); setBarcodeBanner(null); }} style={{
           flex: 1, height: 44, borderRadius: 10, border: '1px solid #e5e7eb',
           background: '#fff', color: '#374151', fontSize: 14, fontWeight: 500,
           cursor: 'pointer', fontFamily: 'inherit',
@@ -323,7 +357,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
           const added = grocery.addItems(toAdd.map(p => ({ name: p.name, quantity: p.quantity, unit: p.unit, source: 'scan' })));
           if (added > 0) toast.show(`${added} item${added > 1 ? 's' : ''} added to grocery list`, 'success');
           else toast.show('Items already in grocery list', 'info');
-          setPreview(null); setDupeActions({}); setStoreBanner(null); setBarcodeBanner(null);
+          setPreview(null); setBarcodeContext(null); setDupeActions({}); setStoreBanner(null); setBarcodeBanner(null);
         }} disabled={checkedCount === 0} style={{
           width: '100%', height: 38, borderRadius: 10, border: '1px solid #e5e7eb',
           background: '#fff', color: checkedCount > 0 ? '#374151' : '#9ca3af',
@@ -574,9 +608,6 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
       )}
       {/* Shared preview checklist — used by scan, receipt, and barcode modes */}
       {(mode === 'scan' || mode === 'receipt') && preview && previewChecklist}
-      {limitModal && (
-        <RateLimitModal feature={limitModal.feature} limit={limitModal.limit} onClose={() => setLimitModal(null)} />
-      )}
     </div>
   );
 }
