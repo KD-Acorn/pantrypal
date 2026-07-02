@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { assignCategory, PANTRY_CATEGORY_ORDER } from '../hooks/usePantry';
+import ShopListSheet from '../components/ShopListSheet';
 
 const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch'];
 const GROCERY_UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch','pack'];
@@ -82,6 +83,8 @@ function GroceryContent({ grocery, pantry, saved, toast }) {
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState({});
   const [confirmClear, setConfirmClear] = useState(false);
+  const [showShopSheet, setShowShopSheet] = useState(false);
+  const [showPurchasedBanner, setShowPurchasedBanner] = useState(false);
 
   function handleAdd() {
     const names = input.split(',').map(s => s.trim()).filter(Boolean);
@@ -104,7 +107,8 @@ function GroceryContent({ grocery, pantry, saved, toast }) {
     if (checked.length === 0) return;
     pantry.add(checked.map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit })));
     grocery.clearChecked();
-    toast.show(`${checked.length} item${checked.length > 1 ? 's' : ''} added to pantry`, 'success');
+    setShowPurchasedBanner(false);
+    toast.show(`${checked.length} item${checked.length > 1 ? 's' : ''} added to pantry 🎉`, 'success');
   }
 
   function handleClearChecked() {
@@ -163,6 +167,29 @@ function GroceryContent({ grocery, pantry, saved, toast }) {
           cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
         }}>Add</button>
       </div>
+
+      {checkedCount > 0 && (
+        <button onClick={() => setShowShopSheet(true)} style={{
+          width: '100%', height: 42, borderRadius: 10, border: 'none',
+          background: '#10b981', color: '#fff', fontSize: 14, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit', marginBottom: 12,
+        }}>🛒 Shop ({checkedCount} item{checkedCount !== 1 ? 's' : ''})</button>
+      )}
+
+      {showPurchasedBanner && checkedCount > 0 && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10,
+          padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#166534',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+        }}>
+          <span>Did you get everything?</span>
+          <button onClick={handleAddToPantry} style={{
+            fontSize: 12, fontWeight: 600, color: '#065f46', background: 'none',
+            border: 'none', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+            textDecoration: 'underline',
+          }}>Mark checked as purchased</button>
+        </div>
+      )}
 
       {grocery.items.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
@@ -249,6 +276,13 @@ function GroceryContent({ grocery, pantry, saved, toast }) {
             )}
           </div>
         </>
+      )}
+
+      {showShopSheet && (
+        <ShopListSheet
+          checkedItems={grocery.getChecked()}
+          onClose={() => { setShowShopSheet(false); setShowPurchasedBanner(true); }}
+        />
       )}
     </div>
   );

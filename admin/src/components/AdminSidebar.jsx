@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase';
 import { useAdminAuth } from '../context/AdminAuthContext';
 
 const NAV_ITEMS = [
@@ -14,6 +16,18 @@ const NAV_ITEMS = [
 export default function AdminSidebar({ activePage, onNavigate }) {
   const { currentUser, signOut } = useAdminAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [openBugCount, setOpenBugCount] = useState(0);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'bug_reports'), snap => {
+      const count = snap.docs.filter(d => {
+        const s = d.data().status;
+        return !s || s === 'open';
+      }).length;
+      setOpenBugCount(count);
+    }, () => {});
+    return unsub;
+  }, []);
 
   const email = currentUser?.email || '';
   const initial = (currentUser?.displayName || email).charAt(0).toUpperCase();
@@ -39,6 +53,12 @@ export default function AdminSidebar({ activePage, onNavigate }) {
             }}>
               <span style={{ fontSize: 16, width: 22, textAlign: 'center' }}>{item.icon}</span>
               {item.label}
+              {item.key === 'bugs' && openBugCount > 0 && (
+                <span style={{
+                  background: '#ef4444', color: '#fff', borderRadius: '999px',
+                  padding: '1px 7px', fontSize: 11, fontWeight: 700, marginLeft: 'auto',
+                }}>{openBugCount > 9 ? '9+' : openBugCount}</span>
+              )}
             </button>
           );
         })}
