@@ -207,12 +207,16 @@ export default function RecipeCard({
   onAddToGrocery,
 }) {
   const isCommunity = mode === 'community';
+  const isDrink = mode === 'drink' || mode === 'saved-drink';
   const [showFull, setShowFull] = useState(false);
   const [servings, setServings] = useState(recipe.baseServings || 2);
   const [nutritionTip, setNutritionTip] = useState(false);
   const [showNutrition, setShowNutrition] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [mocktail, setMocktail] = useState(null);
+  const [mocktailLoading, setMocktailLoading] = useState(false);
+  const [showMocktail, setShowMocktail] = useState(false);
 
   const enabledPartners = useMemo(() => {
     const ids = settings?.shoppingPartners || [];
@@ -251,6 +255,23 @@ export default function RecipeCard({
     e.stopPropagation();
     if (isSaved) { onUnsave?.(recipe); }
     else { onSave?.(recipe); }
+  }
+
+  async function handleMocktail(e) {
+    e.stopPropagation();
+    if (showMocktail && mocktail) { setShowMocktail(false); return; }
+    if (mocktail) { setShowMocktail(true); return; }
+    const id = recipe.catalogId || (recipe.cocktailDbId ? `cdb_${recipe.cocktailDbId}` : null);
+    if (!id) return;
+    setMocktailLoading(true);
+    try {
+      const resp = await fetch(`${API}/api/drinks/mocktail/${id}`);
+      if (!resp.ok) throw new Error('Failed');
+      const data = await resp.json();
+      setMocktail(data.mocktail);
+      setShowMocktail(true);
+    } catch { /* silent — button stays available */ }
+    finally { setMocktailLoading(false); }
   }
 
   const summaryVisible = !collapsed;
@@ -311,9 +332,17 @@ export default function RecipeCard({
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
             {isCommunity && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#ecfdf5', color: '#065f46' }}>{recipe.isUserSubmitted ? 'Original Recipe' : 'Community Recipe'}</span>}
-            {recipe.cuisine && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#374151' }}>{recipe.cuisine}</span>}
+            {recipe.cuisine && !isDrink && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#374151' }}>{recipe.cuisine}</span>}
             {recipe.cookTime && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>⏱ {recipe.cookTime}</span>}
+            {recipe.prepTime && !recipe.cookTime && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>⏱ {recipe.prepTime}</span>}
             {recipe.difficulty && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: diffColor(recipe.difficulty) }}>{recipe.difficulty}</span>}
+            {isDrink && recipe.category && <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#eff6ff', color: '#1d4ed8' }}>🥤 {recipe.category.charAt(0).toUpperCase() + recipe.category.slice(1)}</span>}
+            {isDrink && recipe.isAlcoholic != null && (
+              <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: recipe.isAlcoholic ? '#fef2f2' : '#f0fdf4', color: recipe.isAlcoholic ? '#991b1b' : '#065f46' }}>
+                {recipe.isAlcoholic ? '🍷 Alcoholic' : '🍹 Non-Alcoholic'}
+              </span>
+            )}
+            {isDrink && recipe.glassType && <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>🥃 {recipe.glassType}</span>}
             {isCommunity && recipe.ratingCount > 0 && (
               <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: '#fffbeb', color: '#92400e' }}>★ {(recipe.rating || 0).toFixed(1)} ({recipe.ratingCount})</span>
             )}
@@ -362,7 +391,19 @@ export default function RecipeCard({
             );
           })()}
 
-          {onMadeIt && !isCommunity && (
+          {isDrink && recipe.isAlcoholic && (recipe.catalogId || recipe.cocktailDbId) && (
+            <button onClick={handleMocktail} disabled={mocktailLoading} style={{
+              width: '100%', height: 38, borderRadius: 8, border: '1px solid #e5e7eb',
+              background: showMocktail ? '#f0fdf4' : '#fff', color: showMocktail ? '#059669' : '#374151',
+              fontSize: 13, fontWeight: 500, cursor: mocktailLoading ? 'default' : 'pointer',
+              fontFamily: 'inherit', marginBottom: 8,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}>
+              {mocktailLoading ? <><Spinner size={14} /> Creating mocktail version...</> : showMocktail ? '🍹 View Original Cocktail' : '🍹 Make it a Mocktail'}
+            </button>
+          )}
+
+          {onMadeIt && !isCommunity && !isDrink && (
             <button onClick={(e) => { e.stopPropagation(); onMadeIt(recipe, servings); }} style={{
               width: '100%', height: 38, borderRadius: 8, border: 'none',
               background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
@@ -370,7 +411,7 @@ export default function RecipeCard({
             }}>✅ Made It</button>
           )}
 
-          {onCustomize && !isCommunity && (
+          {onCustomize && !isCommunity && !isDrink && (
             <button onClick={(e) => { e.stopPropagation(); onCustomize(recipe); }} style={{
               width: '100%', height: 38, borderRadius: 8, border: '1px solid #e5e7eb',
               background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500,
@@ -524,13 +565,36 @@ export default function RecipeCard({
               </div>
             </div>
           )}
-          {recipe.steps?.length > 0 && (
+          {isDrink && showMocktail && mocktail && (
+            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12, padding: 14, marginTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#065f46', marginBottom: 10 }}>🍹 Mocktail Version: {mocktail.title}</div>
+              {mocktail.description && <div style={{ fontSize: 12, color: '#374151', marginBottom: 10 }}>{mocktail.description}</div>}
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 8 }}>Ingredients</div>
+              {(mocktail.ingredients || []).map((ing, j) => (
+                <div key={j} style={{ fontSize: 13, color: '#374151', padding: '4px 0' }}>• {ing.amount} {ing.unit} {ing.name}</div>
+              ))}
+              {mocktail.steps?.length > 0 && (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginTop: 12, marginBottom: 8 }}>Instructions</div>
+                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
+                    {mocktail.steps.map((s, j) => <li key={j} style={{ marginBottom: 6 }}>{s}</li>)}
+                  </ol>
+                </>
+              )}
+            </div>
+          )}
+
+          {!(isDrink && showMocktail && mocktail) && recipe.steps?.length > 0 && (
             <div style={{ marginTop: 20 }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 12 }}>Instructions</div>
               <ol style={{ margin: 0, paddingLeft: 22, fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
                 {recipe.steps.map((s, j) => <li key={j} style={{ marginBottom: 10, paddingLeft: 4 }}>{s}</li>)}
               </ol>
             </div>
+          )}
+
+          {isDrink && recipe.garnish && !showMocktail && (
+            <div style={{ marginTop: 12, fontSize: 13, color: '#6b7280', fontStyle: 'italic' }}>Garnish: {recipe.garnish}</div>
           )}
           {(!recipe.steps || recipe.steps.length === 0) && recipe.sourceUrl && (
             <div style={{ marginTop: 20 }}>

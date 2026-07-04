@@ -16,5 +16,11 @@
     "detectedStore": "BJ's Wholesale Club",
     "rawItemCount": 2,
     "parsedItemCount": 2
+  },
+  {
+    "timestamp": "2026-07-04T20:06:29.742Z",
+    "detectedStore": "Dollar General",
+    "rawItemCount": 5,
+    "parsedItemCount": 5
   }
 ]

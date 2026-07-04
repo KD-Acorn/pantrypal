@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { assignCategory, PANTRY_CATEGORY_ORDER } from '../hooks/usePantry';
+import { loadCategoryCorrections, recordCategoryCorrection } from '../hooks/useCategoryLearning';
 import ShopListSheet from '../components/ShopListSheet';
 
 const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch'];
@@ -24,7 +25,42 @@ function timeAgo(date) {
   return `${Math.floor(s/86400)}d ago`;
 }
 
-function PantryItemList({ items, onEdit, onRemove, editingId, editDraft, setEditDraft, saveEdit, setEditingId, showAddedBy }) {
+function CategoryPickerSheet({ item, onSelect, onClose }) {
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 200 }} />
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 480,
+        background: '#fff', borderRadius: '20px 20px 0 0',
+        padding: '20px 16px 48px', zIndex: 201,
+      }}>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: '#111827' }}>
+          Change category for{' '}
+          <span style={{ color: '#10b981' }}>{item.name}</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {PANTRY_CATEGORY_ORDER.map(cat => (
+            <button key={cat} onClick={() => onSelect(item, cat)} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 12px', borderRadius: 10, border: 'none',
+              background: cat === item.category ? '#ecfdf5' : '#f9fafb',
+              color: cat === item.category ? '#065f46' : '#1f2937',
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 14,
+              fontWeight: cat === item.category ? 600 : 400,
+              textAlign: 'left',
+            }}>
+              <span>{cat}</span>
+              {cat === item.category && <span style={{ fontSize: 16, color: '#10b981' }}>✓</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function PantryItemList({ items, onEdit, onRemove, editingId, editDraft, setEditDraft, saveEdit, setEditingId, showAddedBy, onCategoryTap }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {items.map(item => (
@@ -40,9 +76,23 @@ function PantryItemList({ items, onEdit, onRemove, editingId, editDraft, setEdit
                 <input type="number" min="1" value={editDraft.quantity} onChange={e => setEditDraft(d => ({ ...d, quantity: Math.max(1, parseInt(e.target.value) || 1) }))}
                   style={{ width: 60, height: 34, border: '1px solid #e5e7eb', borderRadius: 8, padding: '0 8px', fontSize: 13, fontFamily: 'inherit', outline: 'none', textAlign: 'center' }} />
                 <select value={editDraft.unit} onChange={e => setEditDraft(d => ({ ...d, unit: e.target.value }))}
-                  style={{ height: 34, border: '1px solid #e5e7eb', borderRadius: 8, padding: '0 8px', fontSize: 13, fontFamily: 'inherit', background: '#fff' }}>
+                  style={{ flex: 1, height: 34, border: '1px solid #e5e7eb', borderRadius: 8, padding: '0 8px', fontSize: 13, fontFamily: 'inherit', background: '#fff' }}>
                   {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                 </select>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 3 }}>Expiry date</div>
+                  <input type="date" value={editDraft.expiryDate || ''} onChange={e => setEditDraft(d => ({ ...d, expiryDate: e.target.value }))}
+                    style={{ width: '100%', height: 34, border: '1px solid #e5e7eb', borderRadius: 8, padding: '0 8px', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 3 }}>Category</div>
+                  <select value={editDraft.category || ''} onChange={e => setEditDraft(d => ({ ...d, category: e.target.value }))}
+                    style={{ width: '100%', height: 34, border: '1px solid #e5e7eb', borderRadius: 8, padding: '0 8px', fontSize: 12, fontFamily: 'inherit', background: '#fff' }}>
+                    {PANTRY_CATEGORY_ORDER.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button onClick={saveEdit} style={{ fontSize: 12, fontWeight: 600, padding: '5px 14px', borderRadius: 6, background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
@@ -53,6 +103,15 @@ function PantryItemList({ items, onEdit, onRemove, editingId, editDraft, setEdit
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 14, color: '#1f2937' }}><span style={{ fontWeight: 500 }}>{item.quantity} {item.unit}</span> {item.name}</span>
+                {item.category && onCategoryTap && (
+                  <div style={{ marginTop: 3 }}>
+                    <button onClick={() => onCategoryTap(item)} style={{
+                      fontSize: 10, background: '#f3f4f6', color: '#6b7280',
+                      border: '1px solid #e5e7eb', borderRadius: 10, padding: '2px 7px',
+                      cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1.4,
+                    }}>{item.category}</button>
+                  </div>
+                )}
                 {showAddedBy && item.addedByName && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>Added by {item.addedByName}</div>}
                 {item.expiryDate && (() => {
                   const days = daysUntilExpiry(item.expiryDate);
@@ -303,6 +362,9 @@ export default function PantryPage({ pantry, toast, household, householdPantry, 
   const [activity, setActivity] = useState([]);
   const [pantrySort, setPantrySort] = useState('date');
   const [categoryFilter, setCategoryFilter] = useState('All');
+  const [catPickerItem, setCatPickerItem] = useState(null);
+
+  useEffect(() => { loadCategoryCorrections(); }, []);
 
   useEffect(() => {
     if (!hh?.id) { setActivity([]); return; }
@@ -335,16 +397,31 @@ export default function PantryPage({ pantry, toast, household, householdPantry, 
 
   function startEdit(item) {
     setEditingId(item.id);
-    setEditDraft({ name: item.name, quantity: item.quantity, unit: item.unit, expiryDate: item.expiryDate || '' });
+    setEditDraft({ name: item.name, quantity: item.quantity, unit: item.unit, expiryDate: item.expiryDate || '', category: item.category || assignCategory(item.name) });
   }
 
   function saveEdit() {
     if (!editDraft.name?.trim()) return;
-    const changes = { name: editDraft.name.trim(), quantity: editDraft.quantity, unit: editDraft.unit, expiryDate: editDraft.expiryDate || null };
+    const trimmedName = editDraft.name.trim();
+    const changes = { name: trimmedName, quantity: editDraft.quantity, unit: editDraft.unit, expiryDate: editDraft.expiryDate || null };
+    if (editDraft.category) changes.category = editDraft.category;
+    // Record correction when user explicitly chose a category that differs from keyword-based default
+    if (editDraft.category && editDraft.category !== assignCategory(trimmedName)) {
+      recordCategoryCorrection(uid, trimmedName, editDraft.category);
+    }
     if (isHousehold) householdPantry.updateItem(editingId, changes, uid, displayName);
     else pantry.update(editingId, changes);
     setEditingId(null);
     toast.show('Updated', 'success');
+  }
+
+  function handleCategoryChange(item, newCategory) {
+    if (newCategory === item.category) { setCatPickerItem(null); return; }
+    if (isHousehold) householdPantry.updateItem(item.id, { category: newCategory }, uid, displayName);
+    else pantry.update(item.id, { category: newCategory });
+    recordCategoryCorrection(uid, item.name, newCategory);
+    toast.show(`Moved to ${newCategory}`, 'success');
+    setCatPickerItem(null);
   }
 
   function handleRemove(id) {
@@ -589,14 +666,16 @@ export default function PantryPage({ pantry, toast, household, householdPantry, 
                   </div>
                   <PantryItemList items={grouped[cat]} onEdit={startEdit} onRemove={handleRemove}
                     editingId={editingId} editDraft={editDraft} setEditDraft={setEditDraft}
-                    saveEdit={saveEdit} setEditingId={setEditingId} showAddedBy={isHousehold} />
+                    saveEdit={saveEdit} setEditingId={setEditingId} showAddedBy={isHousehold}
+                    onCategoryTap={setCatPickerItem} />
                 </div>
               ))}
             </div>
           ) : (
             <PantryItemList items={displayItems} onEdit={startEdit} onRemove={handleRemove}
               editingId={editingId} editDraft={editDraft} setEditDraft={setEditDraft}
-              saveEdit={saveEdit} setEditingId={setEditingId} showAddedBy={isHousehold} />
+              saveEdit={saveEdit} setEditingId={setEditingId} showAddedBy={isHousehold}
+              onCategoryTap={setCatPickerItem} />
           )}
 
           {activePantry.items.length > 0 && (
@@ -617,6 +696,14 @@ export default function PantryPage({ pantry, toast, household, householdPantry, 
             </div>
           )}
         </>
+      )}
+
+      {catPickerItem && (
+        <CategoryPickerSheet
+          item={catPickerItem}
+          onSelect={handleCategoryChange}
+          onClose={() => setCatPickerItem(null)}
+        />
       )}
     </div>
   );

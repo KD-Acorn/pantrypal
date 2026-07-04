@@ -243,7 +243,7 @@ function VisibilityBadge({ v }) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory, grocery, settings, household, householdRecipes, uid, displayName, mealPlan, householdMealPlan, userRecipes }) {
+export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHistory, grocery, settings, household, householdRecipes, uid, displayName, mealPlan, householdMealPlan, userRecipes, savedDrinks }) {
   const { currentUser } = useAuth();
   const hh = household?.household;
 
@@ -252,6 +252,7 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
 
   // My Recipes state
   const [recipesTab, setRecipesTab] = useState('personal');
+  const [recipeTypeTab, setRecipeTypeTab] = useState('food'); // 'food' | 'drinks'
   const [expandedId, setExpandedId] = useState(null);
   const [sort, setSort] = useState('date');
   const [cuisineFilter, setCuisineFilter] = useState('All');
@@ -455,14 +456,43 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
       {/* ── MY RECIPES TAB ── */}
       {subTab === 'recipes' && (
         <>
-          {hh && (
+          {/* Food / Drinks toggle */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: '#f3f4f6', borderRadius: 10, padding: 3 }}>
+            <button onClick={() => setRecipeTypeTab('food')} style={{ flex: 1, height: 34, borderRadius: 8, border: 'none', background: recipeTypeTab === 'food' ? '#10b981' : 'transparent', color: recipeTypeTab === 'food' ? '#fff' : '#6b7280', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>🍽 Food</button>
+            <button onClick={() => setRecipeTypeTab('drinks')} style={{ flex: 1, height: 34, borderRadius: 8, border: 'none', background: recipeTypeTab === 'drinks' ? '#10b981' : 'transparent', color: recipeTypeTab === 'drinks' ? '#fff' : '#6b7280', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              🥤 Drinks{savedDrinks?.items?.length > 0 ? ` (${savedDrinks.items.length})` : ''}
+            </button>
+          </div>
+
+          {/* Saved drinks list */}
+          {recipeTypeTab === 'drinks' && (
+            savedDrinks?.items?.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
+                <div style={{ fontSize: 36, marginBottom: 8 }}>🥤</div>
+                <div style={{ fontSize: 14, marginBottom: 16 }}>No saved drinks yet. Find drinks on the Discover tab and tap the bookmark to save them.</div>
+                <button onClick={() => onSwitchTab('discover')} style={{ fontSize: 14, fontWeight: 600, padding: '10px 24px', borderRadius: 10, background: '#10b981', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Go to Discover</button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {(savedDrinks?.items || []).map(d => (
+                  <RecipeCard key={d.id} recipe={d} pantryItems={pantry.items}
+                    collapsed={expandedId !== d.id} onToggleCollapse={() => setExpandedId(prev => prev === d.id ? null : d.id)}
+                    isSaved={true} onUnsave={() => { savedDrinks.unsave(d.id); toast.show('Drink removed', 'info'); }}
+                    mode="saved-drink" settings={settings}
+                  />
+                ))}
+              </div>
+            )
+          )}
+
+          {recipeTypeTab === 'food' && hh && (
             <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: '#f3f4f6', borderRadius: 10, padding: 3 }}>
               <button onClick={() => setRecipesTab('personal')} style={{ flex: 1, height: 36, borderRadius: 8, border: 'none', background: recipesTab === 'personal' ? '#10b981' : 'transparent', color: recipesTab === 'personal' ? '#fff' : '#6b7280', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>👤 My Recipes</button>
               <button onClick={() => setRecipesTab('household')} style={{ flex: 1, height: 36, borderRadius: 8, border: 'none', background: recipesTab === 'household' ? '#10b981' : 'transparent', color: recipesTab === 'household' ? '#fff' : '#6b7280', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>🏠 Household</button>
             </div>
           )}
 
-          {recipesTab === 'household' && hh && householdRecipes ? (
+          {recipeTypeTab === 'food' && (recipesTab === 'household' && hh && householdRecipes ? (
             <div>
               {householdRecipes.items.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '48px 0', color: '#9ca3af' }}>
@@ -534,7 +564,7 @@ export default function RecipesPage({ saved, pantry, toast, onSwitchTab, cookHis
                 ))}
               </div>
             </>
-          )}
+          ))}
         </>
       )}
 

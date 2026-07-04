@@ -5,6 +5,7 @@ import { trackEvent } from '../utils/analytics';
 import MadeItSheet from '../components/MadeItSheet';
 import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
 import CommunityFeed from './CommunityFeed';
+import DrinkDiscoverPage from './DrinkDiscoverPage';
 import useSeenRecipes from '../hooks/useSeenRecipes';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
@@ -22,7 +23,7 @@ const DIETARY_LABELS = {
   'dairy-free': '🥛 Dairy-Free', 'nut-free': '🥜 Nut-Free', pescatarian: '🐟 Pescatarian',
 };
 
-export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings, rateLimit, grocery, userRecipes, household, displayName }) {
+export default function DiscoverPage({ pantry, toast, saved, cookHistory, settings, rateLimit, grocery, userRecipes, household, displayName, savedDrinks }) {
   const [discoverTab, setDiscoverTab] = useState('ai');
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -161,6 +162,9 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
         <button onClick={() => setDiscoverTab('community')} style={tabStyle(discoverTab === 'community')}>
           👥 Community
         </button>
+        <button onClick={() => setDiscoverTab('drinks')} style={tabStyle(discoverTab === 'drinks')}>
+          🥤 Drinks
+        </button>
       </div>
 
       {discoverTab === 'ai' && (
@@ -281,6 +285,10 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
           household={household}
           displayName={displayName}
         />
+      )}
+
+      {discoverTab === 'drinks' && (
+        <DrinkDiscoverPage pantry={pantry} toast={toast} savedDrinks={savedDrinks} />
       )}
 
       {madeItRecipe && (

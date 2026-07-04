@@ -27,6 +27,7 @@ import DiscoverPage from './pages/DiscoverPage';
 import AuthPage from './pages/AuthPage';
 import BugReportButton from './components/BugReportButton';
 import SupportChatBubble from './components/SupportChatBubble';
+import useSavedDrinks from './hooks/useSavedDrinks';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { doc, getDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
@@ -130,6 +131,7 @@ function AppContent() {
   const householdRecipes = useHouseholdRecipes(household.household?.id, household.logActivity);
   const householdMealPlan = useHouseholdMealPlan(household.household?.id, household.logActivity);
   const userRecipes = useUserRecipes(uid);
+  const savedDrinks = useSavedDrinks(uid);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -225,8 +227,8 @@ function AppContent() {
       <MigrationBanner uid={uid} toast={toast} />
       {tab === 'scan' && <ScanPage pantry={pantry} toast={toast} grocery={grocery} rateLimit={rateLimit} />}
       {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} household={household} householdPantry={householdPantry} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} grocery={grocery} saved={saved} />}
-      {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} household={household} householdRecipes={householdRecipes} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} mealPlan={mealPlan} householdMealPlan={householdMealPlan} userRecipes={userRecipes} />}
-      {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} grocery={grocery} userRecipes={userRecipes} household={household} displayName={settings.displayName || currentUser?.displayName || ''} />}
+      {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} household={household} householdRecipes={householdRecipes} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} mealPlan={mealPlan} householdMealPlan={householdMealPlan} userRecipes={userRecipes} savedDrinks={savedDrinks} />}
+      {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} grocery={grocery} userRecipes={userRecipes} household={household} displayName={settings.displayName || currentUser?.displayName || ''} savedDrinks={savedDrinks} />}
       <SupportChatBubble uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} currentTab={tab} pantryItemCount={pantry.items.length} />
       <BugReportButton uid={uid} currentTab={tab} toast={toast} pantry={pantry} saved={saved} />
       <Toast toast={toast.toast} />

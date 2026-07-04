@@ -45,10 +45,45 @@ app.use(cors({
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+// ── Category corrections cache — refreshed hourly, injected into scan prompt ─
+let _correctionsBlock = '';
+let _correctionsBlockAt = 0;
+
+async function refreshCorrectionsBlock() {
+  if (!adminDb) return;
+  try {
+    const snap = await adminDb.collection('category_corrections')
+      .orderBy('totalCorrections', 'desc')
+      .limit(30)
+      .get();
+    const lines = [];
+    for (const d of snap.docs) {
+      const data = d.data();
+      const entries = Object.entries(data.votes || {});
+      if (!entries.length) continue;
+      entries.sort((a, b) => b[1] - a[1]);
+      const [topCat, topVotes] = entries[0];
+      if (topVotes >= 2) lines.push(`  "${data.displayName || d.id}" → ${topCat}`);
+    }
+    _correctionsBlock = lines.length
+      ? `\nKnown item corrections — when you identify one of these, use the noted category:\n${lines.join('\n')}\n`
+      : '';
+    _correctionsBlockAt = Date.now();
+  } catch {
+    // Non-critical — scan still works without corrections
+  }
+}
+
+// Load on startup
+refreshCorrectionsBlock();
+
 // ── POST /api/scan — OpenAI GPT-4o vision ──────────────────────────────────
 app.post('/api/scan', async (req, res) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
+
+  // Refresh corrections block if stale (> 1 hour)
+  if (Date.now() - _correctionsBlockAt > 3600_000) refreshCorrectionsBlock();
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -65,7 +100,7 @@ app.post('/api/scan', async (req, res) => {
           content: [
             {
               type: 'text',
-              text: `Look at this image of a kitchen, fridge, or pantry.
+              text: `Look at this image of a kitchen, fridge, or pantry.${_correctionsBlock}
 
 TASK 1 — Identify food ingredients:
 List every food ingredient you can identify visually. For each item:
@@ -73,6 +108,13 @@ List every food ingredient you can identify visually. For each item:
 - If you see a package, try to read the size from the label
 - Assign the most logical unit: 'item' for whole fruits/vegetables you can count, 'bottle' for bottles, 'can' for cans, 'bag' for bags, 'box' for boxes, 'bunch' for herbs or bananas, 'lb' or 'oz' if weight is visible on packaging
 - Default to quantity 1 if count is unclear
+
+BEVERAGES & BOTTLES — read labels carefully:
+Pay close attention to any bottles, cans, cartons, or jugs. Read the brand name and product name from the label or logo to identify the specific product — do NOT guess from bottle shape alone.
+- Alcoholic beverages: beer (e.g. "Corona Extra", "Heineken", "Budweiser", "Blue Moon"), wine bottles, spirit bottles (whiskey, vodka, rum, gin, tequila, etc.)
+- Non-alcoholic beverages: soda (e.g. "Sprite", "Coca-Cola", "Pepsi", "Dr Pepper"), juice ("Tropicana Orange Juice"), sports drinks ("Gatorade Lemon-Lime"), energy drinks ("Red Bull"), water, sparkling water
+- Return the specific product name as shown on the label (e.g. "Corona Extra" not "beer", "Sprite" not "soda", "Tropicana Orange Juice" not "juice")
+- If the label is not readable, use the most specific generic name you can determine (e.g. "IPA beer bottle", "wine bottle — red")
 
 TASK 2 — Detect barcodes:
 Also look for any product barcodes (vertical black and white lines) that are clearly visible and readable in the image.
@@ -82,8 +124,14 @@ For each barcode you can confidently read:
 - Skip any barcode that is blurry, partially visible, at an angle, or too far away to read accurately — do NOT guess
 - Skip barcodes where you can only see part of the digits
 
+For each ingredient, assign a "category" from this exact list:
+"🥩 Meat & Seafood", "🥛 Dairy & Eggs", "🥦 Produce", "🌾 Grains & Bread",
+"🥫 Canned & Packaged", "🧂 Spices & Condiments", "🧊 Frozen",
+"🥤 Beverages", "🍫 Snacks & Sweets", "🛍 Other"
+Beverages (including beer, wine, liquor, juice, soda, water, sports drinks) → "🥤 Beverages"
+
 Return ONLY a JSON object with this exact structure (no markdown, no preamble):
-{"ingredients":[{"name":"apples","quantity":3,"unit":"item"}],"barcodes":["0048700000315"]}
+{"ingredients":[{"name":"apples","quantity":3,"unit":"item","category":"🥦 Produce"}],"barcodes":["0048700000315"]}
 
 If no barcodes are found return an empty array for "barcodes". If no food items are found return an empty array for "ingredients".`,
             },
@@ -1458,6 +1506,325 @@ app.post('/api/delete-account/now', async (req, res) => {
   }
 });
 
+// ── Drinks helpers ────────────────────────────────────────────────────────────
+
+function isValidDrink(drink) {
+  if (!drink.title || drink.title.length < 3) return false;
+  if (!drink.ingredients || drink.ingredients.length < 2) return false;
+  if (!drink.steps || drink.steps.length < 1) return false;
+  return true;
+}
+
+function parseCocktailDBDrink(drink) {
+  const ingredients = [];
+  for (let i = 1; i <= 15; i++) {
+    const name = (drink[`strIngredient${i}`] || '').trim();
+    if (!name) break;
+    const measure = (drink[`strMeasure${i}`] || '').trim();
+    const amountMatch = measure.match(/^([\d.\/]+)/);
+    let amount = 1;
+    if (amountMatch) {
+      const raw = amountMatch[1];
+      amount = raw.includes('/') ? eval(raw) : parseFloat(raw) || 1;
+    }
+    const rawUnit = measure.replace(/^[\d.\/]+\s*/, '').trim() || 'whole';
+    ingredients.push({ amount: Math.round(amount * 100) / 100, unit: normalizeUnit(rawUnit), name: name.toLowerCase() });
+  }
+  const instructions = drink.strInstructions || '';
+  const steps = instructions.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  return {
+    title: drink.strDrink,
+    category: 'cocktail',
+    isAlcoholic: drink.strAlcoholic === 'Alcoholic',
+    glassType: drink.strGlass || null,
+    garnish: null,
+    thumbnail: drink.strDrinkThumb || null,
+    ingredients,
+    steps: steps.length ? steps : [instructions.slice(0, 500)],
+    source: 'cocktaildb',
+    cocktailDbId: drink.idDrink,
+    tags: (drink.strTags || '').split(',').map(t => t.trim()).filter(Boolean),
+    description: instructions.slice(0, 150).trim(),
+    prepTime: '5 min',
+    difficulty: 'Easy',
+    baseServings: 1,
+  };
+}
+
+async function searchDrinkCatalog(ingredientNames, category, excludeIds, limit) {
+  if (!adminDb) return [];
+  const top5 = ingredientNames.slice(0, 5);
+  if (top5.length === 0) return [];
+  try {
+    const snap = await adminDb.collection('beverage_catalog')
+      .where('indexedIngredients', 'array-contains-any', top5)
+      .limit(limit * 6)
+      .get();
+    const results = [];
+    for (const docSnap of snap.docs) {
+      if (excludeIds.includes(docSnap.id)) continue;
+      const data = docSnap.data();
+      if (category && data.category !== category) continue;
+      const { score: matchScore } = calcMatchScore(
+        (data.ingredients || []).map(i => ({ name: i.name })), ingredientNames
+      );
+      if (matchScore >= 20) {
+        const missing = calcMissing(
+          (data.ingredients || []).map(i => ({ name: i.name })), ingredientNames
+        );
+        results.push({
+          title: data.title,
+          description: data.description || '',
+          prepTime: data.prepTime || '5 min',
+          difficulty: data.difficulty || 'Easy',
+          matchScore,
+          missingIngredients: missing,
+          baseServings: data.baseServings || 1,
+          ingredients: data.ingredients || [],
+          steps: data.steps || [],
+          source: data.source || 'catalog',
+          thumbnail: data.thumbnail || null,
+          cocktailDbId: data.cocktailDbId || null,
+          catalogId: docSnap.id,
+          category: data.category,
+          isAlcoholic: data.isAlcoholic || false,
+          glassType: data.glassType || null,
+          garnish: data.garnish || null,
+          tags: data.tags || [],
+        });
+      }
+    }
+    results.sort((a, b) => b.matchScore - a.matchScore);
+    return results.slice(0, limit);
+  } catch (err) {
+    console.error('[Drinks] Catalog search error:', err.message);
+    return [];
+  }
+}
+
+async function saveToBeverageCatalog(drinks) {
+  if (!adminDb) return;
+  for (const d of drinks) {
+    try {
+      if (!isValidDrink(d)) { console.log('[BevCatalog] Rejected:', d.title); continue; }
+      let docId;
+      if (d.source === 'cocktaildb' && d.cocktailDbId) {
+        docId = `cdb_${d.cocktailDbId}`;
+      } else if (d.source === 'ai' && d.isAlcoholic) {
+        continue; // Don't persist AI cocktails — too variable
+      } else if (d.source === 'ai') {
+        docId = `ai_${(d.title || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40)}_${Date.now()}`;
+      } else {
+        continue;
+      }
+      const ref = adminDb.collection('beverage_catalog').doc(docId);
+      const existing = await ref.get();
+      if (existing.exists) {
+        await ref.update({ useCount: FieldValue.increment(1) });
+      } else {
+        const indexedIngredients = (d.ingredients || [])
+          .map(i => (i.name || '').toLowerCase().trim()).filter(Boolean);
+        await ref.set({
+          id: docId, source: d.source, cocktailDbId: d.cocktailDbId || null,
+          title: d.title, category: d.category || 'cocktail',
+          description: d.description || '', prepTime: d.prepTime || '5 min',
+          difficulty: d.difficulty || 'Easy', baseServings: d.baseServings || 1,
+          ingredients: d.ingredients || [], indexedIngredients, steps: d.steps || [],
+          thumbnail: d.thumbnail || null, tags: d.tags || [],
+          isAlcoholic: d.isAlcoholic || false, glassType: d.glassType || null, garnish: d.garnish || null,
+          fetchedAt: FieldValue.serverTimestamp(), useCount: 1, avgRating: 0, ratingCount: 0,
+        });
+      }
+    } catch (err) { console.error('[BevCatalog] Save error:', err.message); }
+  }
+}
+
+async function searchCocktailDB(pantryNames) {
+  const topIngredients = pantryNames.slice(0, 2);
+  const filterResults = await Promise.all(
+    topIngredients.map(ing =>
+      fetchWithTimeout(`https://www.thecocktaildb.com/api/json/v1/1/filter.php?i=${encodeURIComponent(ing)}`)
+        .then(r => r.ok ? r.json() : { drinks: null })
+        .catch(() => ({ drinks: null }))
+    )
+  );
+  const seenIds = new Set();
+  const drinkIds = [];
+  for (const data of filterResults) {
+    for (const d of (data.drinks || []).slice(0, 5)) {
+      if (!seenIds.has(d.idDrink)) { seenIds.add(d.idDrink); drinkIds.push(d.idDrink); }
+    }
+  }
+  const detailResults = await Promise.all(
+    drinkIds.slice(0, 8).map(id =>
+      fetchWithTimeout(`https://www.thecocktaildb.com/api/json/v1/1/lookup.php?i=${id}`)
+        .then(r => r.ok ? r.json() : { drinks: null })
+        .catch(() => ({ drinks: null }))
+    )
+  );
+  return detailResults.map(data => data.drinks?.[0]).filter(Boolean).map(parseCocktailDBDrink);
+}
+
+async function generateAIDrinks(category, pantryNames, dietaryFilters, needed) {
+  if (needed <= 0) return [];
+  const ingList = pantryNames.slice(0, 10).join(', ');
+  const dietaryClause = dietaryFilters?.length
+    ? `Dietary requirements: ${dietaryFilters.join(', ')}. Strictly respect these.`
+    : '';
+  const schema = `{"title":"","description":"","prepTime":"5 min","difficulty":"Easy","baseServings":1,"ingredients":[{"amount":1,"unit":"cup","name":""}],"steps":[""],"tags":[],"matchScore":0,"missingIngredients":[]}`;
+  const cocktailSchema = `{"title":"","description":"","prepTime":"5 min","difficulty":"Easy","baseServings":1,"isAlcoholic":true,"glassType":"","garnish":"","ingredients":[{"amount":1,"unit":"oz","name":""}],"steps":[""],"tags":[],"matchScore":0,"missingIngredients":[]}`;
+
+  const prompts = {
+    smoothie: `You are a nutritionist and smoothie expert. The user has these ingredients: ${ingList}. Suggest ${needed} smoothie recipes they can make. Focus on flavor balance, nutrition, and realistic combinations. ${dietaryClause} Return ONLY a valid JSON array, no other text. Each object: ${schema}`,
+    juice: `You are a juice bar expert. The user has these ingredients: ${ingList}. Suggest ${needed} cold-pressed or blended juice recipes. ${dietaryClause} Return ONLY a valid JSON array, no other text. Each object: ${schema}`,
+    milkshake: `You are a dessert chef specializing in milkshakes. The user has these ingredients: ${ingList}. Suggest ${needed} creamy, indulgent milkshake recipes. ${dietaryClause} Return ONLY a valid JSON array, no other text. Each object: ${schema}`,
+    cocktail: `You are a professional mixologist. Suggest ${needed} cocktail recipes using these available ingredients: ${ingList}. Include classic cocktails and creative originals. ${dietaryClause} Return ONLY a valid JSON array, no other text. Each object: ${cocktailSchema}`,
+  };
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 2048, messages: [{ role: 'user', content: prompts[category] || prompts.smoothie }] }),
+    });
+    if (!response.ok) throw new Error(`Claude API error: ${response.status}`);
+    const data = await response.json();
+    const rawText = data.content?.[0]?.text || '[]';
+    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+    const drinks = JSON.parse(jsonMatch[0]);
+    return Array.isArray(drinks) ? drinks.map(d => ({ ...d, source: 'ai' })) : [];
+  } catch (err) {
+    console.error('[Drinks] AI generation error:', err.message);
+    return [];
+  }
+}
+
+// ── POST /api/drinks — Hybrid: BeverageCatalog + TheCocktailDB + Claude ───────
+app.post('/api/drinks', async (req, res) => {
+  const { ingredients, category, dietaryFilters, seenDrinkIds } = req.body;
+  if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
+  if (!category) return res.status(400).json({ error: 'category is required' });
+
+  const pantryNames = extractIngredientNames(ingredients);
+  const TARGET = 5;
+  const excludeIds = Array.isArray(seenDrinkIds) ? seenDrinkIds : [];
+
+  try {
+    // Step 1: Search beverage_catalog
+    const catalogHits = await searchDrinkCatalog(pantryNames, category, excludeIds, TARGET);
+    if (catalogHits.length >= 3) {
+      console.log('[Drinks] Catalog hit:', catalogHits.length, 'drinks found');
+      return res.json({ drinks: catalogHits.slice(0, TARGET) });
+    }
+
+    console.log('[Drinks] Catalog miss — fetching from APIs, category:', category);
+    const allDrinks = [...catalogHits];
+    const seenTitles = new Set(allDrinks.map(d => d.title.toLowerCase()));
+
+    // Step 2: TheCocktailDB for cocktails
+    if (category === 'cocktail') {
+      const cdbDrinks = await searchCocktailDB(pantryNames).catch(err => {
+        console.error('[Drinks] CocktailDB failed:', err.message);
+        return [];
+      });
+      for (const d of cdbDrinks) {
+        if (seenTitles.has(d.title.toLowerCase())) continue;
+        if (excludeIds.includes(`cdb_${d.cocktailDbId}`)) continue;
+        const { score: matchScore } = calcMatchScore(d.ingredients, pantryNames);
+        const missing = calcMissing(d.ingredients, pantryNames);
+        allDrinks.push({ ...d, matchScore, missingIngredients: missing });
+        seenTitles.add(d.title.toLowerCase());
+      }
+      saveToBeverageCatalog(cdbDrinks).catch(() => {});
+      console.log('[Drinks] CocktailDB returned:', cdbDrinks.length, 'drinks');
+    }
+
+    // Step 3: AI for remaining slots
+    const needed = TARGET - allDrinks.length;
+    if (needed > 0) {
+      const aiDrinks = await generateAIDrinks(category, pantryNames, dietaryFilters, needed);
+      for (const d of aiDrinks) {
+        if (!d.title || seenTitles.has(d.title.toLowerCase())) continue;
+        const ings = (d.ingredients || []).map(i => ({ ...i, name: (i.name || '').toLowerCase() }));
+        const { score: matchScore } = calcMatchScore(ings, pantryNames);
+        const missing = calcMissing(ings, pantryNames);
+        allDrinks.push({
+          ...d,
+          ingredients: ings,
+          matchScore: d.matchScore || matchScore,
+          missingIngredients: d.missingIngredients || missing,
+          category,
+          isAlcoholic: d.isAlcoholic ?? (category === 'cocktail'),
+          glassType: d.glassType || null,
+          garnish: d.garnish || null,
+        });
+        seenTitles.add(d.title.toLowerCase());
+      }
+      saveToBeverageCatalog(aiDrinks.filter(d => !d.isAlcoholic).map(d => ({ ...d, category }))).catch(() => {});
+      console.log('[Drinks] AI generated:', aiDrinks.length, 'drinks');
+    }
+
+    allDrinks.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+    res.json({ drinks: allDrinks.slice(0, TARGET) });
+  } catch (err) {
+    console.error('[Drinks] Error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch drink recipes' });
+  }
+});
+
+// ── GET /api/drinks/mocktail/:cocktailId — AI mocktail conversion ─────────────
+app.get('/api/drinks/mocktail/:cocktailId', async (req, res) => {
+  const { cocktailId } = req.params;
+  if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
+  try {
+    // Return cached version if available
+    const cacheRef = adminDb.collection('beverage_catalog').doc(cocktailId)
+      .collection('mocktail').doc('version');
+    const cached = await cacheRef.get();
+    if (cached.exists) return res.json({ mocktail: cached.data() });
+
+    const cocktailDoc = await adminDb.collection('beverage_catalog').doc(cocktailId).get();
+    if (!cocktailDoc.exists) return res.status(404).json({ error: 'Cocktail not found' });
+    const cocktail = cocktailDoc.data();
+
+    const ingredientList = (cocktail.ingredients || [])
+      .map(i => `${i.amount} ${i.unit} ${i.name}`).join(', ');
+
+    const prompt = `Convert this cocktail to a non-alcoholic mocktail:
+Title: ${cocktail.title}
+Ingredients: ${ingredientList}
+
+Replace each alcoholic ingredient with a non-alcoholic alternative:
+- Vodka/Gin/Rum/Tequila → sparkling water or ginger beer
+- Whiskey/Bourbon → apple cider or strong tea
+- Wine → grape juice or sparkling cider
+- Beer → sparkling water with a splash of lemon
+- Liqueurs → fruit juice of similar flavor
+
+Keep the same ratios and preparation method.
+Return JSON only, no other text: {"title":"","description":"","ingredients":[{"amount":1,"unit":"oz","name":""}],"steps":[""]}`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, messages: [{ role: 'user', content: prompt }] }),
+    });
+    if (!response.ok) throw new Error(`Claude API error: ${response.status}`);
+    const data = await response.json();
+    const rawText = data.content?.[0]?.text || '{}';
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON in Claude response');
+
+    const mocktail = { ...JSON.parse(jsonMatch[0]), originalCocktailId: cocktailId, isAlcoholic: false, generatedAt: new Date().toISOString() };
+    await cacheRef.set(mocktail);
+    res.json({ mocktail });
+  } catch (err) {
+    console.error('[Drinks] Mocktail error:', err.message);
+    res.status(500).json({ error: 'Failed to generate mocktail' });
+  }
+});
+
 // ── Admin routes — Catalog Management ────────────────────────────────────────
 const ADMIN_UID = process.env.ADMIN_UID;
 
@@ -1473,6 +1840,64 @@ async function verifyAdmin(req, res, next) {
     next();
   } catch { res.status(403).json({ error: 'Invalid token' }); }
 }
+
+// ── POST /api/drinks/seed-cocktails — Seed entire TheCocktailDB ───────────────
+app.post('/api/drinks/seed-cocktails', verifyAdmin, async (req, res) => {
+  if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
+  res.json({ message: 'Cocktail seed started in background — watch server logs for progress' });
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const letters = 'abcdefghijklmnopqrstuvwxyz'.split('');
+  let seeded = 0, skipped = 0, errors = 0;
+
+  (async () => {
+    for (const letter of letters) {
+      try {
+        const r = await fetchWithTimeout(
+          `https://www.thecocktaildb.com/api/json/v1/1/search.php?f=${letter}`, 10000
+        );
+        if (!r.ok) { errors++; await sleep(200); continue; }
+        const data = await r.json();
+        if (!data.drinks) { await sleep(200); continue; }
+
+        for (const drink of data.drinks) {
+          try {
+            const docId = `cdb_${drink.idDrink}`;
+            const existing = await adminDb.collection('beverage_catalog').doc(docId).get();
+            if (existing.exists) { skipped++; continue; }
+
+            const parsed = parseCocktailDBDrink(drink);
+            const indexedIngredients = parsed.ingredients.map(i => i.name.toLowerCase().trim()).filter(Boolean);
+            await adminDb.collection('beverage_catalog').doc(docId).set({
+              id: docId, source: 'cocktaildb', cocktailDbId: drink.idDrink,
+              title: parsed.title, category: 'cocktail',
+              description: parsed.description || '', prepTime: parsed.prepTime,
+              difficulty: parsed.difficulty, baseServings: parsed.baseServings,
+              ingredients: parsed.ingredients, indexedIngredients,
+              steps: parsed.steps, thumbnail: parsed.thumbnail,
+              tags: parsed.tags, isAlcoholic: parsed.isAlcoholic,
+              glassType: parsed.glassType, garnish: null,
+              fetchedAt: FieldValue.serverTimestamp(), useCount: 0, avgRating: 0, ratingCount: 0,
+            });
+            seeded++;
+            console.log(`[DrinkSeed] Saved: ${parsed.title}`);
+          } catch (err) {
+            errors++;
+            console.error(`[DrinkSeed] Error saving ${drink.strDrink}:`, err.message);
+          }
+          await sleep(50);
+        }
+        console.log(`[DrinkSeed] Progress: letter=${letter}, seeded=${seeded}, skipped=${skipped}`);
+        await sleep(200);
+      } catch (err) {
+        errors++;
+        console.error(`[DrinkSeed] Letter ${letter} failed:`, err.message);
+        await sleep(200);
+      }
+    }
+    console.log(`[DrinkSeed] Complete — seeded:${seeded}, skipped:${skipped}, errors:${errors}`);
+  })().catch(err => console.error('[DrinkSeed] Fatal:', err.message));
+});
 
 let seedState = { running: false, stop: false, logs: [], saved: 0, total: 0, pointsUsed: 0 };
 
@@ -1613,6 +2038,340 @@ app.get('/api/admin/catalog/recipes', verifyAdmin, async (req, res) => {
 app.delete('/api/admin/catalog/recipes/:id', verifyAdmin, async (req, res) => {
   try {
     await adminDb.collection('recipe_catalog').doc(req.params.id).delete();
+    res.json({ deleted: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Admin routes — Beverage Catalog Management ───────────────────────────────
+
+let cocktailAdminState = { running: false, stop: false, logs: [], seeded: 0, skipped: 0, errors: 0 };
+let beverageSeedState = { running: false, stop: false, logs: [], saved: 0, requestsUsed: 0, errors: 0 };
+
+// ── POST /api/admin/seed-cocktails ────────────────────────────────────────────
+app.post('/api/admin/seed-cocktails', verifyAdmin, async (req, res) => {
+  if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
+  if (cocktailAdminState.running) return res.json({ error: 'Cocktail seed already running' });
+
+  cocktailAdminState = { running: true, stop: false, logs: ['Starting CocktailDB seed a-z...'], seeded: 0, skipped: 0, errors: 0 };
+  res.json({ started: true });
+
+  const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+  const letters = 'abcdefghijklmnopqrstuvwxyz'.split('');
+
+  (async () => {
+    for (const letter of letters) {
+      if (cocktailAdminState.stop) { cocktailAdminState.logs.push('Stopped by admin.'); break; }
+      try {
+        const r = await fetchWithTimeout(`https://www.thecocktaildb.com/api/json/v1/1/search.php?f=${letter}`, 10000);
+        if (!r.ok) { cocktailAdminState.errors++; await sleepMs(200); continue; }
+        const data = await r.json();
+        if (!data.drinks) { await sleepMs(200); continue; }
+        cocktailAdminState.logs.push(`Letter ${letter.toUpperCase()}: ${data.drinks.length} drinks`);
+
+        for (const drink of data.drinks) {
+          if (cocktailAdminState.stop) break;
+          try {
+            const docId = `cdb_${drink.idDrink}`;
+            const existing = await adminDb.collection('beverage_catalog').doc(docId).get();
+            if (existing.exists) { cocktailAdminState.skipped++; continue; }
+
+            const parsed = parseCocktailDBDrink(drink);
+            const indexedIngredients = parsed.ingredients.map(i => i.name.toLowerCase().trim()).filter(Boolean);
+            await adminDb.collection('beverage_catalog').doc(docId).set({
+              id: docId, source: 'cocktaildb', cocktailDbId: drink.idDrink,
+              title: parsed.title, category: 'cocktail',
+              description: parsed.description || '', prepTime: '5 min',
+              difficulty: 'Easy', baseServings: 1,
+              ingredients: parsed.ingredients, indexedIngredients, steps: parsed.steps,
+              thumbnail: parsed.thumbnail, tags: parsed.tags,
+              isAlcoholic: parsed.isAlcoholic, glassType: parsed.glassType, garnish: null,
+              fetchedAt: FieldValue.serverTimestamp(), useCount: 0, avgRating: 0, ratingCount: 0,
+            });
+            cocktailAdminState.seeded++;
+            cocktailAdminState.logs.push(`Saved: ${parsed.title}`);
+          } catch (err) {
+            cocktailAdminState.errors++;
+            cocktailAdminState.logs.push(`Error: ${drink.strDrink} — ${err.message}`);
+          }
+          await sleepMs(50);
+        }
+        cocktailAdminState.logs.push(`Progress: seeded=${cocktailAdminState.seeded}, skipped=${cocktailAdminState.skipped}`);
+        await sleepMs(200);
+      } catch (err) {
+        cocktailAdminState.errors++;
+        cocktailAdminState.logs.push(`Letter ${letter} failed: ${err.message}`);
+        await sleepMs(200);
+      }
+    }
+    cocktailAdminState.running = false;
+    cocktailAdminState.logs.push(`Done. Seeded: ${cocktailAdminState.seeded}, Skipped: ${cocktailAdminState.skipped}, Errors: ${cocktailAdminState.errors}`);
+  })().catch(err => { cocktailAdminState.running = false; cocktailAdminState.logs.push(`Fatal: ${err.message}`); });
+});
+
+app.get('/api/admin/seed-cocktails/status', verifyAdmin, (_req, res) => res.json(cocktailAdminState));
+app.post('/api/admin/seed-cocktails/stop', verifyAdmin, (_req, res) => {
+  cocktailAdminState.stop = true;
+  res.json({ stopped: true });
+});
+
+// ── POST /api/admin/seed-beverages ────────────────────────────────────────────
+// Confirmed Tasty tag slugs (verified via /tags/list):
+//   smoothies_smoothie_bowls → "Smoothies & Smoothie Bowls" (no standalone 'smoothies' tag)
+//   shakes                   → "Shakes" (no 'milkshakes' tag)
+//   juices                   → "Juices"
+//   beverages                → "Beverages"
+const BEV_TASTY_TAGS = [
+  { slug: 'smoothies_smoothie_bowls', defaultCat: 'smoothie' },
+  { slug: 'shakes',                   defaultCat: 'milkshake' },
+  { slug: 'juices',                   defaultCat: 'juice' },
+  { slug: 'beverages',                defaultCat: 'smoothie' },
+];
+
+function bevContentFilterReason(recipe) {
+  const title = (recipe.name || '').toLowerCase();
+  const tagNames = (recipe.tags || []).map(t => (t.name || '').toLowerCase());
+  const nonBeveragePatterns = ['smoothie bowl', 'açaí bowl', 'acai bowl', 'smoothie bowls', 'baby food', 'puree', 'purée', 'toddler'];
+  for (const p of nonBeveragePatterns) {
+    if (title.includes(p)) return 'non-beverage';
+  }
+  if (/\d+\+?\s*(?:-\s*\d+\s*)?month/i.test(recipe.name || '')) return 'non-beverage';
+  if (tagNames.some(t => t === 'baby_food' || t === 'baby-food' || t === 'baby')) return 'non-beverage';
+  if (tagNames.some(t => t === 'cocktails' || t === 'alcohol' || t === 'alcoholic')) return 'non-beverage';
+  return null;
+}
+
+app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
+  if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
+  if (beverageSeedState.running) return res.json({ error: 'Beverage seed already running' });
+
+  const rapidKey = process.env.RAPIDAPI_KEY;
+  const spoonKey = process.env.SPOONACULAR_API_KEY;
+
+  beverageSeedState = { running: true, stop: false, logs: [], saved: 0, requestsUsed: 0, skippedDuplicates: 0, skippedFiltered: 0, errors: 0 };
+  res.json({ started: true, hasTasty: !!rapidKey });
+
+  const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+  const TASTY_LIMIT = 450;
+
+  if (!rapidKey) {
+    beverageSeedState.logs.push('RAPIDAPI_KEY not set — falling back to Spoonacular.');
+  }
+
+  (async () => {
+    // Primary: Tasty API
+    if (rapidKey && !beverageSeedState.stop) {
+      beverageSeedState.logs.push(`Tasty API: tags = ${BEV_TASTY_TAGS.map(t => t.slug).join(', ')}`);
+
+      for (const { slug, defaultCat } of BEV_TASTY_TAGS) {
+        if (beverageSeedState.stop || beverageSeedState.requestsUsed >= TASTY_LIMIT) break;
+        let from = 0, hasMore = true;
+
+        while (hasMore && !beverageSeedState.stop && beverageSeedState.requestsUsed < TASTY_LIMIT) {
+          try {
+            const resp = await fetch(
+              `https://tasty.p.rapidapi.com/recipes/list?from=${from}&size=20&tags=${encodeURIComponent(slug)}`,
+              { headers: { 'x-rapidapi-host': 'tasty.p.rapidapi.com', 'x-rapidapi-key': rapidKey } }
+            );
+            beverageSeedState.requestsUsed++;
+
+            if (resp.status === 429 || resp.status === 402) {
+              beverageSeedState.logs.push(`Tasty quota exhausted (HTTP ${resp.status}). Resume tomorrow.`);
+              beverageSeedState.stop = true; break;
+            }
+            if (!resp.ok) { beverageSeedState.errors++; hasMore = false; break; }
+
+            const data = await resp.json();
+            const results = data.results || [];
+            if (!results.length) { hasMore = false; break; }
+
+            for (const recipe of results) {
+              if (!recipe.name || !recipe.id) {
+                beverageSeedState.logs.push('Skipped [missing data]: (no name/id)');
+                continue;
+              }
+
+              const filterReason = bevContentFilterReason(recipe);
+              if (filterReason) {
+                beverageSeedState.skippedFiltered++;
+                beverageSeedState.logs.push(`Skipped [non-beverage]: ${recipe.name}`);
+                continue;
+              }
+
+              const docId = `tasty_${recipe.id}`;
+              const existing = await adminDb.collection('beverage_catalog').doc(docId).get();
+              if (existing.exists) {
+                beverageSeedState.skippedDuplicates++;
+                beverageSeedState.logs.push(`Skipped [duplicate]: ${recipe.name}`);
+                continue;
+              }
+
+              const name = (recipe.name || '').toLowerCase();
+              const tagNames = (recipe.tags || []).map(t => (t.name || '').toLowerCase());
+              const category = name.includes('milkshake') || name.includes('shake') ? 'milkshake'
+                : name.includes('smoothie') ? 'smoothie'
+                : name.includes(' juice') || tagNames.some(t => t === 'juices') ? 'juice'
+                : defaultCat;
+
+              const ingredients = (recipe.sections || []).flatMap(s =>
+                (s.components || []).map(c => ({
+                  amount: c.measurements?.[0]?.quantity ? parseFloat(c.measurements[0].quantity) || 1 : 1,
+                  unit: c.measurements?.[0]?.unit?.name || 'item',
+                  name: (c.ingredient?.name || '').toLowerCase().trim(),
+                })).filter(i => i.name)
+              );
+              const steps = (recipe.instructions || []).map(s => s.display_text).filter(Boolean);
+              if (!ingredients.length || !steps.length) {
+                beverageSeedState.logs.push(`Skipped [missing data]: ${recipe.name} (no ingredients or steps)`);
+                continue;
+              }
+
+              await adminDb.collection('beverage_catalog').doc(docId).set({
+                id: docId, source: 'tasty', tastyId: String(recipe.id), cocktailDbId: null,
+                title: recipe.name, category,
+                description: (recipe.description || '').slice(0, 200),
+                prepTime: recipe.prep_time_minutes ? `${recipe.prep_time_minutes} min` : '10 min',
+                difficulty: 'Easy', baseServings: recipe.num_servings || 1,
+                ingredients, indexedIngredients: ingredients.map(i => i.name).filter(Boolean),
+                steps, thumbnail: recipe.thumbnail_url || null,
+                tags: (recipe.tags || []).map(t => t.name).filter(Boolean),
+                isAlcoholic: false, abv: null, glassType: null, garnish: null,
+                fetchedAt: FieldValue.serverTimestamp(), useCount: 0, avgRating: 0, ratingCount: 0,
+              });
+              beverageSeedState.saved++;
+              beverageSeedState.logs.push(`Saved [${category}]: ${recipe.name}`);
+              await sleepMs(50);
+            }
+
+            beverageSeedState.logs.push(`tag=${slug} from=${from}: ${results.length} results, req=${beverageSeedState.requestsUsed}, saved=${beverageSeedState.saved}, dupes=${beverageSeedState.skippedDuplicates}, filtered=${beverageSeedState.skippedFiltered}`);
+            from += 20;
+            hasMore = results.length === 20;
+            await sleepMs(250);
+          } catch (err) {
+            beverageSeedState.errors++;
+            beverageSeedState.logs.push(`Error tag=${slug}: ${err.message}`);
+            hasMore = false;
+          }
+        }
+      }
+    }
+
+    // Fallback / secondary: Spoonacular
+    if (spoonKey && !beverageSeedState.stop && (beverageSeedState.saved === 0 || !rapidKey)) {
+      beverageSeedState.logs.push('Spoonacular fallback: fetching smoothies/juices/milkshakes...');
+      const queries = ['smoothie', 'fresh juice', 'milkshake', 'fruit smoothie', 'green smoothie'];
+      let spoonPoints = 0;
+
+      for (const q of queries) {
+        if (beverageSeedState.stop || spoonPoints >= 30) break;
+        try {
+          const url = `https://api.spoonacular.com/recipes/complexSearch?query=${encodeURIComponent(q)}&type=drink&number=10&addRecipeInformation=true&apiKey=${spoonKey}`;
+          const resp = await fetch(url);
+          if (resp.status === 402) { beverageSeedState.logs.push('Spoonacular daily quota exhausted.'); break; }
+          if (!resp.ok) continue;
+          const data = await resp.json();
+          spoonPoints++;
+
+          for (const r of (data.results || [])) {
+            const docId = `sp_bev_${r.id}`;
+            const existing = await adminDb.collection('beverage_catalog').doc(docId).get();
+            if (existing.exists) {
+              beverageSeedState.skippedDuplicates++;
+              beverageSeedState.logs.push(`Skipped [duplicate]: ${r.title}`);
+              continue;
+            }
+
+            const name = (r.title || '').toLowerCase();
+            const category = name.includes('milkshake') || name.includes('shake') ? 'milkshake'
+              : name.includes('juice') ? 'juice' : 'smoothie';
+
+            const ingredients = (r.extendedIngredients || []).map(ing => ({
+              amount: Math.round((ing.amount || 1) * 100) / 100,
+              unit: ing.unit || 'item', name: (ing.name || '').toLowerCase(),
+            })).filter(i => i.name);
+            const steps = r.analyzedInstructions?.[0]?.steps?.map(s => s.step) || ['Blend all ingredients until smooth.'];
+            if (!ingredients.length) {
+              beverageSeedState.logs.push(`Skipped [missing data]: ${r.title} (no ingredients)`);
+              continue;
+            }
+
+            await adminDb.collection('beverage_catalog').doc(docId).set({
+              id: docId, source: 'spoonacular', spoonacularId: r.id, cocktailDbId: null,
+              title: r.title, category,
+              description: ((r.summary || '').replace(/<[^>]*>/g, '').slice(0, 200)),
+              prepTime: `${r.readyInMinutes || 10} min`, difficulty: 'Easy', baseServings: r.servings || 2,
+              ingredients, indexedIngredients: ingredients.map(i => i.name),
+              steps, thumbnail: r.image || null,
+              tags: [...(r.cuisines || []), ...(r.dishTypes || [])],
+              isAlcoholic: false, abv: null, glassType: null, garnish: null,
+              fetchedAt: FieldValue.serverTimestamp(), useCount: 0, avgRating: 0, ratingCount: 0,
+            });
+            beverageSeedState.saved++;
+            beverageSeedState.logs.push(`Spoonacular saved [${category}]: ${r.title}`);
+            await sleepMs(150);
+          }
+        } catch (err) {
+          beverageSeedState.logs.push(`Spoonacular error "${q}": ${err.message}`);
+        }
+      }
+    }
+
+    beverageSeedState.running = false;
+    beverageSeedState.logs.push(`Done. Saved: ${beverageSeedState.saved}, Skipped (duplicate): ${beverageSeedState.skippedDuplicates}, Skipped (filtered): ${beverageSeedState.skippedFiltered}, Tasty requests: ${beverageSeedState.requestsUsed}`);
+  })().catch(err => { beverageSeedState.running = false; beverageSeedState.logs.push(`Fatal: ${err.message}`); });
+});
+
+app.get('/api/admin/seed-beverages/status', verifyAdmin, (_req, res) => res.json(beverageSeedState));
+app.post('/api/admin/seed-beverages/stop', verifyAdmin, (_req, res) => {
+  beverageSeedState.stop = true;
+  res.json({ stopped: true });
+});
+
+// ── GET /api/admin/beverage-catalog/stats ─────────────────────────────────────
+app.get('/api/admin/beverage-catalog/stats', verifyAdmin, async (_req, res) => {
+  try {
+    const snap = await adminDb.collection('beverage_catalog').get();
+    const bySource = { cocktaildb: 0, tasty: 0, spoonacular: 0, ai: 0, other: 0 };
+    const byCategory = { cocktail: 0, smoothie: 0, juice: 0, milkshake: 0 };
+    let alcoholic = 0, nonAlcoholic = 0;
+    for (const d of snap.docs) {
+      const data = d.data();
+      const src = data.source || 'other';
+      bySource[src] = (bySource[src] || 0) + 1;
+      const cat = data.category || 'cocktail';
+      byCategory[cat] = (byCategory[cat] || 0) + 1;
+      if (data.isAlcoholic) alcoholic++; else nonAlcoholic++;
+    }
+    const configSnap = await adminDb.collection('config').doc('beverage_seed').get();
+    const cfg = configSnap.exists ? configSnap.data() : {};
+    res.json({ total: snap.size, bySource, byCategory, alcoholic, nonAlcoholic, lastCocktailSeed: cfg.lastCocktailSeed || null, lastBeverageSeed: cfg.lastBeverageSeed || null });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /api/admin/beverage-catalog/drinks ────────────────────────────────────
+app.get('/api/admin/beverage-catalog/drinks', verifyAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageLimit = parseInt(req.query.limit) || 20;
+    const sourceFilter = req.query.source || null;
+    const categoryFilter = req.query.category || null;
+    const search = (req.query.search || '').toLowerCase();
+
+    let snap = await adminDb.collection('beverage_catalog').orderBy('title').get();
+    let all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (sourceFilter) all = all.filter(d => d.source === sourceFilter);
+    if (categoryFilter) all = all.filter(d => d.category === categoryFilter);
+    if (search) all = all.filter(d => (d.title || '').toLowerCase().includes(search));
+
+    const total = all.length;
+    const start = (page - 1) * pageLimit;
+    res.json({ drinks: all.slice(start, start + pageLimit), total, page });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── DELETE /api/admin/beverage-catalog/drinks/:id ─────────────────────────────
+app.delete('/api/admin/beverage-catalog/drinks/:id', verifyAdmin, async (req, res) => {
+  try {
+    await adminDb.collection('beverage_catalog').doc(req.params.id).delete();
     res.json({ deleted: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
