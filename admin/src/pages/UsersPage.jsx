@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, getCountFromServer } from 'firebase/firestore';
 import { format } from 'date-fns';
 import { db } from '../firebase';
 
@@ -17,17 +17,53 @@ function SkeletonRow() {
   );
 }
 
+function CountCell({ uid, field, counts, loading }) {
+  if (loading && !counts[uid]) {
+    return (
+      <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+        <div style={{ height: 14, background: '#f3f4f6', borderRadius: 4, width: 28, margin: '0 auto' }} />
+      </td>
+    );
+  }
+  return <td style={{ padding: '10px 12px', color: '#374151', textAlign: 'center' }}>{counts[uid]?.[field] ?? 0}</td>;
+}
+
 export default function UsersPage() {
   const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState([]);
   const [deletions, setDeletions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [userCounts, setUserCounts] = useState({});
+  const [countsLoading, setCountsLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState('createdAt');
   const [sortDir, setSortDir] = useState('desc');
   const [page, setPage] = useState(0);
 
   useEffect(() => { loadUsers(); loadDeletions(); }, []);
+
+  async function loadCounts(userList) {
+    setCountsLoading(true);
+    const counts = {};
+    await Promise.all(userList.map(async (u) => {
+      try {
+        const [ps, rs, cs] = await Promise.all([
+          getCountFromServer(collection(db, 'pantry', u.id, 'items')),
+          getCountFromServer(collection(db, 'saved_recipes', u.id, 'recipes')),
+          getCountFromServer(collection(db, 'cook_history', u.id, 'entries')),
+        ]);
+        counts[u.id] = {
+          pantryCount: ps.data().count,
+          recipeCount: rs.data().count,
+          cookCount: cs.data().count,
+        };
+      } catch {
+        counts[u.id] = { pantryCount: 0, recipeCount: 0, cookCount: 0 };
+      }
+    }));
+    setUserCounts(counts);
+    setCountsLoading(false);
+  }
 
   async function loadUsers() {
     setLoading(true);
@@ -40,12 +76,10 @@ export default function UsersPage() {
           name: data.displayName || data.name || '',
           email: data.email || '',
           createdAt: data.createdAt?.toDate?.() || new Date(data.createdAt || 0),
-          pantryCount: data.pantryCount || 0,
-          recipeCount: data.recipeCount || 0,
-          cookCount: data.cookCount || 0,
         };
       });
       setUsers(list);
+      loadCounts(list);
     } catch (err) {
       console.error('[Users] Load error:', err);
     } finally {
@@ -84,7 +118,12 @@ export default function UsersPage() {
       list = list.filter(u => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
     }
     list.sort((a, b) => {
-      let av = a[sortKey], bv = b[sortKey];
+      let av = ['pantryCount', 'recipeCount', 'cookCount'].includes(sortKey)
+        ? (userCounts[a.id]?.[sortKey] ?? 0)
+        : a[sortKey];
+      let bv = ['pantryCount', 'recipeCount', 'cookCount'].includes(sortKey)
+        ? (userCounts[b.id]?.[sortKey] ?? 0)
+        : b[sortKey];
       if (av instanceof Date) { av = av.getTime(); bv = bv?.getTime?.() || 0; }
       if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv || '').toLowerCase(); }
       if (av < bv) return sortDir === 'asc' ? -1 : 1;
@@ -92,7 +131,7 @@ export default function UsersPage() {
       return 0;
     });
     return list;
-  }, [users, search, sortKey, sortDir]);
+  }, [users, userCounts, search, sortKey, sortDir]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const pageUsers = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -202,9 +241,9 @@ export default function UsersPage() {
                   <td style={{ padding: '10px 12px', color: '#6b7280' }}>
                     {u.createdAt instanceof Date && !isNaN(u.createdAt) ? format(u.createdAt, 'MMM d, yyyy') : '—'}
                   </td>
-                  <td style={{ padding: '10px 12px', color: '#374151', textAlign: 'center' }}>{u.pantryCount}</td>
-                  <td style={{ padding: '10px 12px', color: '#374151', textAlign: 'center' }}>{u.recipeCount}</td>
-                  <td style={{ padding: '10px 12px', color: '#374151', textAlign: 'center' }}>{u.cookCount}</td>
+                  <CountCell uid={u.id} field="pantryCount" counts={userCounts} loading={countsLoading} />
+                  <CountCell uid={u.id} field="recipeCount" counts={userCounts} loading={countsLoading} />
+                  <CountCell uid={u.id} field="cookCount" counts={userCounts} loading={countsLoading} />
                 </tr>
               ))}
               {!loading && pageUsers.length === 0 && (

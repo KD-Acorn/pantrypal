@@ -65,13 +65,27 @@ app.post('/api/scan', async (req, res) => {
           content: [
             {
               type: 'text',
-              text: `List every food ingredient visible in this image. For each item:
+              text: `Look at this image of a kitchen, fridge, or pantry.
+
+TASK 1 — Identify food ingredients:
+List every food ingredient you can identify visually. For each item:
 - If you can count individual items, return that count as quantity
 - If you see a package, try to read the size from the label
 - Assign the most logical unit: 'item' for whole fruits/vegetables you can count, 'bottle' for bottles, 'can' for cans, 'bag' for bags, 'box' for boxes, 'bunch' for herbs or bananas, 'lb' or 'oz' if weight is visible on packaging
 - Default to quantity 1 if count is unclear
-Examples: 3 visible apples → {"name":"apples","quantity":3,"unit":"item"}, a bag of rice with '5 lb' visible → {"name":"rice","quantity":5,"unit":"lb"}, a 6-pack of beer → {"name":"beer","quantity":6,"unit":"can"}
-Return ONLY a JSON array of objects with name, quantity, unit. No markdown, no preamble.`,
+
+TASK 2 — Detect barcodes:
+Also look for any product barcodes (vertical black and white lines) that are clearly visible and readable in the image.
+For each barcode you can confidently read:
+- Read the human-readable digits printed below the barcode — use those digits, not the bars themselves
+- Only include barcodes where you can read ALL digits confidently
+- Skip any barcode that is blurry, partially visible, at an angle, or too far away to read accurately — do NOT guess
+- Skip barcodes where you can only see part of the digits
+
+Return ONLY a JSON object with this exact structure (no markdown, no preamble):
+{"ingredients":[{"name":"apples","quantity":3,"unit":"item"}],"barcodes":["0048700000315"]}
+
+If no barcodes are found return an empty array for "barcodes". If no food items are found return an empty array for "ingredients".`,
             },
             {
               type: 'image_url',
@@ -89,13 +103,19 @@ Return ONLY a JSON array of objects with name, quantity, unit. No markdown, no p
     }
 
     const data = await response.json();
-    const raw = data.choices?.[0]?.message?.content || '[]';
+    const raw = data.choices?.[0]?.message?.content || '{}';
     const cleaned = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-    const ingredients = Array.isArray(parsed) ? parsed.map(i =>
-      typeof i === 'string' ? i : (i.name ? i : null)
-    ).filter(Boolean) : [];
-    res.json({ ingredients });
+    let parsed;
+    try { parsed = JSON.parse(cleaned); } catch { parsed = null; }
+    // Handle both new object format {ingredients,barcodes} and legacy array format
+    const rawIngredients = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.ingredients) ? parsed.ingredients : []);
+    const ingredients = rawIngredients.map(i =>
+      typeof i === 'string' ? { name: i, quantity: 1, unit: 'item' } : (i?.name ? i : null)
+    ).filter(Boolean);
+    const detectedBarcodes = Array.isArray(parsed?.barcodes)
+      ? parsed.barcodes.filter(b => b && /^\d{6,}$/.test(String(b)))
+      : [];
+    res.json({ ingredients, detectedBarcodes });
   } catch (err) {
     console.error('Scan error:', err);
     res.status(500).json({ error: 'Ingredient scan failed' });
@@ -1025,6 +1045,52 @@ function packagingUnit(packagingStr) {
   return null;
 }
 
+// ── GET /api/barcode-lookup — look up a barcode string via verified_products + OFF ─
+app.get('/api/barcode-lookup', async (req, res) => {
+  const { barcode } = req.query;
+  if (!barcode) return res.status(400).json({ error: 'barcode required' });
+  try {
+    if (adminDb) {
+      try {
+        const verifiedDoc = await adminDb.collection('verified_products').doc(barcode).get();
+        if (verifiedDoc.exists) {
+          const vd = verifiedDoc.data();
+          if (vd.confirmCount >= 2) {
+            return res.json({
+              name: vd.name, quantity: vd.quantity, unit: vd.unit,
+              productName: vd.originalName, brand: null, barcode,
+              communityVerified: true, itemSize: vd.itemSize || null,
+            });
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+    const offResp = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+    const offData = await offResp.json();
+    if (!offData || offData.status === 0) return res.json({ error: 'not_found', barcode });
+    const product = offData.product || {};
+    const productName = product.product_name || product.product_name_en || 'Unknown product';
+    const brand = product.brands || null;
+    const pkgUnit = packagingUnit(product.packaging);
+    const parsedQ = parseOFFQuantity(product.quantity);
+    let { quantity, unit, itemSize, itemUnit } = parsedQ;
+    let ingredientName, resolvedItemSize = null;
+    if (itemSize) {
+      if (pkgUnit) unit = pkgUnit;
+      resolvedItemSize = `${itemSize}${itemUnit}`;
+      ingredientName = `${productName} (${quantity} x ${itemSize}${itemUnit})`;
+    } else {
+      if (quantity === 1 && unit === 'item' && pkgUnit) unit = pkgUnit;
+      const sizeLabel = product.quantity ? product.quantity.trim() : null;
+      ingredientName = sizeLabel ? `${productName} (${sizeLabel})` : productName;
+    }
+    res.json({ name: ingredientName, quantity, unit, productName, brand, barcode, itemSize: resolvedItemSize });
+  } catch (err) {
+    console.error('Barcode lookup error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /api/scan-barcode — GPT-4o barcode extraction + Open Food Facts ──────
 app.post('/api/scan-barcode', async (req, res) => {
   const { imageBase64, mimeType } = req.body;
@@ -1043,7 +1109,7 @@ app.post('/api/scan-barcode', async (req, res) => {
         messages: [{
           role: 'user',
           content: [
-            { type: 'text', text: 'Look at this image and find any barcode or QR code. Return ONLY the barcode number as a plain string with no spaces, dashes, or other characters. If no barcode is found, return null. Example response: 0123456789012' },
+            { type: 'text', text: 'Look carefully at this image for any barcode (1D linear barcode) or QR code. Barcodes are the pattern of vertical black and white lines typically found on product packaging.\n\nInstructions:\n1. Find the barcode in the image\n2. Read each digit carefully — accuracy is critical, one wrong digit returns a completely different product\n3. Common barcode formats: UPC-A (12 digits), EAN-13 (13 digits), UPC-E (8 digits)\n4. If you can see the human-readable numbers printed below the barcode, use those — they are more reliable than reading the bars themselves\n5. Return ONLY the digits with no spaces, dashes, or other characters\n6. If you cannot confidently read all digits, return null\n\nExample good response: 0048700000315\nExample bad response: \'004870000031\' (wrong digit count) or \'0048700-000315\' (contains dash)' },
             { type: 'image_url', image_url: { url: `data:${mimeType || 'image/jpeg'};base64,${imageBase64}` } },
           ],
         }],
@@ -1138,28 +1204,42 @@ app.post('/api/scan-barcode', async (req, res) => {
 
 // ── POST /api/scan-barcode/confirm — record user-verified barcode correction ──
 app.post('/api/scan-barcode/confirm', async (req, res) => {
-  const { barcode, originalName, name, quantity, unit, itemSize, uid } = req.body;
+  const { barcode, originalName, name, correctedName, quantity, unit, itemSize, uid, needsReview } = req.body;
   if (!barcode || !name || !uid) return res.status(400).json({ error: 'barcode, name, uid required' });
   if (!adminDb) return res.status(503).json({ error: 'Database unavailable' });
   try {
     const ref = adminDb.collection('verified_products').doc(barcode);
     const snap = await ref.get();
     if (snap.exists) {
-      await ref.update({
+      const updateData = {
         name, quantity, unit, itemSize: itemSize || null,
         originalName: originalName || snap.data().originalName,
         confirmedBy: uid,
         confirmCount: FieldValue.increment(1),
         lastConfirmedAt: FieldValue.serverTimestamp(),
         source: 'user_correction',
-      });
+      };
+      if (needsReview) {
+        updateData.needsReview = true;
+        updateData.correctedName = correctedName || name;
+        updateData.reportedBy = uid;
+        updateData.reportedAt = FieldValue.serverTimestamp();
+      }
+      await ref.update(updateData);
     } else {
-      await ref.set({
+      const setData = {
         barcode, originalName: originalName || name, name, quantity, unit,
         itemSize: itemSize || null, confirmedBy: uid,
         confirmCount: 1, lastConfirmedAt: FieldValue.serverTimestamp(),
         source: 'user_correction',
-      });
+      };
+      if (needsReview) {
+        setData.needsReview = true;
+        setData.correctedName = correctedName || name;
+        setData.reportedBy = uid;
+        setData.reportedAt = FieldValue.serverTimestamp();
+      }
+      await ref.set(setData);
     }
     res.json({ ok: true });
   } catch (err) {
@@ -1534,6 +1614,190 @@ app.delete('/api/admin/catalog/recipes/:id', verifyAdmin, async (req, res) => {
   try {
     await adminDb.collection('recipe_catalog').doc(req.params.id).delete();
     res.json({ deleted: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/support/chat — Claude-powered support assistant ─────────────────
+app.post('/api/support/chat', async (req, res) => {
+  const { messages, context, sessionId, useSonnet } = req.body;
+  if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages required' });
+
+  const model = useSonnet ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
+  const ctx = context || {};
+  const di = ctx.deviceInfo || {};
+  const recentErrorsText = (ctx.recentErrors || []).length > 0
+    ? ctx.recentErrors.map(e => `  - ${e.message || e}`).join('\n')
+    : 'None';
+
+  const systemPrompt = `You are Pantry, the support assistant for My Pantry Club.
+You help users fix problems and learn the app.
+
+PERSONALITY:
+- Talk like a helpful person, not a support document
+- Match the user's energy — casual stays casual, frustrated gets calm and direct
+- Short responses. 2-4 sentences max unless absolutely necessary
+- Never use bullet points unless listing more than 3 things
+- Never say "Here's what I'm noting" or "I'm logging this" — just do it silently
+- Never number your questions — ask ONE question at a time
+- Don't restate what the user just told you back to them
+
+CONVERSATION FLOW:
+Step 1 — Understand first, fix second:
+  First response: acknowledge the problem in one line, then ask what they've already tried. Don't suggest fixes yet.
+  Example: "That sounds annoying. What have you already tried?"
+
+Step 2 — One suggestion at a time:
+  Based on what they've tried, suggest ONE specific thing. Wait for their response before suggesting anything else.
+  Example: "Try closing the app completely and reopening it — does that change anything?"
+
+Step 3 — Dig deeper if needed:
+  If basic fixes don't work, ask ONE targeted diagnostic question.
+  Example: "When you take the photo, does it show you a list of items to confirm before saving?"
+
+Step 4 — Last resort before escalating:
+  "Let me try one more thing with you before I send this up..."
+  Suggest the last thing. If it fails, move to Step 5.
+
+Step 5 — Escalate cleanly:
+  "Okay, I'm sending this up to the dev team now. In the meantime, [one workaround if available]."
+  Then file the bug report silently — don't announce what you're logging or noting.
+
+WHAT NOT TO DO:
+- Don't list multiple questions at once
+- Don't use headers or bold text in casual conversation
+- Don't say "Great question!" or "I understand your frustration"
+- Don't restate the problem back in detail
+- Don't announce "Here's what I'm noting:" — just note it internally
+- Don't give 4-step instructions when 1 step will do
+- Don't say "Our team will investigate" — say "I'm sending this up"
+
+ESCALATION:
+After 3-4 back and forth exchanges with no resolution, naturally transition: "Let me get some extra help on this one."
+Set escalateToSonnet: true in metadata. Continue the conversation — don't make a big deal of the switch.
+
+BUG REPORT FILING:
+When filing a bug report, just say: "Sent it up. [one sentence workaround if relevant]"
+Set fileBugReport: true in metadata. The UI will show the confirmation card — you don't need to describe what you logged.
+
+RESPONSE LENGTH RULE:
+If your response is more than 3 sentences, cut it in half. The user wants help, not a manual.
+
+APP KNOWLEDGE:
+- SCAN TAB: Camera scan (food photo), Receipt scan, Barcode scan. Three modes toggled at top. Camera has Take Photo + Upload from Gallery. Barcode uses GPT-4o to read barcode then looks up Open Food Facts. Receipt uses GPT-4o to parse grocery receipt line items.
+- MY PANTRY TAB: Toggle between Pantry and Grocery list. Pantry shows ingredients with quantity, unit, expiry date, category. Sort by A-Z, Category, Recently Added, Expiring Soon. Filter by category. Grocery: add items manually or sync from saved recipes. Shop List: select checked items, tap Shop to open Amazon Fresh/Instacart.
+- MY RECIPES TAB: 4 sub-tabs: My Recipes | My Creations | Meal Plan | Cook History. My Recipes: saved recipes from Discover. My Creations: original recipes. Meal Plan: weekly calendar. Cook History: log of what you've made.
+- DISCOVER TAB: AI Recipes tab + Community tab. AI Recipes: Find Recipes button, cuisine shuffle, dietary filters, Use Expiring Soon mode, recipe cards with match score, portion scaler, nutrition info, Made It button, Customize button. Community: recipes shared by other users.
+- SETTINGS: Dietary preferences, Shopping partners, Household management, Account deletion, Privacy Policy, Terms of Service, Replay Tour.
+- HOUSEHOLDS: Create or join a household with a 6-digit code. Share pantry, recipes, and meal plan in real time with family.
+
+CURRENT USER CONTEXT:
+Tab: ${ctx.currentTab || 'unknown'}
+Pantry items: ${ctx.pantryItemCount || 0}
+Device: ${di.browser || 'unknown'} on ${di.os || 'unknown'}
+Recent errors:
+${recentErrorsText}
+
+RESPONSE FORMAT — You MUST always respond with valid JSON only, no markdown, no preamble:
+{"message":"your conversational response here","metadata":{"fileBugReport":false,"escalateToSonnet":false,"issueResolved":false,"suggestManualReport":false,"bugReportSummary":null}}
+
+Use \\n for line breaks inside the message string.`;
+
+  try {
+    const claudeMessages = messages.map(m => ({ role: m.role, content: m.content }));
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model, max_tokens: 1024, system: systemPrompt, messages: claudeMessages }),
+    });
+    if (!response.ok) throw new Error(`Claude API error: ${response.status}`);
+    const data = await response.json();
+    const rawContent = data.content?.[0]?.text || '';
+    let parsed;
+    try {
+      parsed = JSON.parse(rawContent.replace(/```json|```/g, '').trim());
+    } catch {
+      parsed = { message: rawContent || "I'm having trouble responding right now. Please try again.", metadata: {} };
+    }
+    const meta = parsed.metadata || {};
+
+    // Auto-file bug report
+    let bugReportId = null;
+    if (meta.fileBugReport && adminDb) {
+      try {
+        const bugRef = await adminDb.collection('bug_reports').add({
+          type: 'bug',
+          description: meta.bugReportSummary || 'Issue reported via AI support chat',
+          currentTab: ctx.currentTab || 'unknown', domain: ctx.domain || '',
+          userAgent: `${di.browser} on ${di.os}`, uid: ctx.uid || 'anonymous',
+          status: 'in_progress', source: 'support_chat', sessionId: sessionId || null,
+          debugInfo: {
+            browser: di.browser, os: di.os, deviceType: di.deviceType,
+            currentTab: ctx.currentTab, pantryItemCount: ctx.pantryItemCount,
+            appVersion: ctx.appVersion, recentLogs: ctx.recentLogs || [],
+            recentErrors: ctx.recentErrors || [], capturedAt: new Date().toISOString(),
+          },
+          timestamp: FieldValue.serverTimestamp(),
+        });
+        bugReportId = bugRef.id;
+      } catch (e) { console.error('[Support] Bug report filing failed:', e.message); }
+    }
+
+    // Update or create support session
+    if (adminDb && sessionId) {
+      try {
+        const sessionRef = adminDb.collection('support_sessions').doc(sessionId);
+        const now = new Date().toISOString();
+        const allMessages = [...messages, { role: 'assistant', content: parsed.message, timestamp: now }];
+        const status = meta.issueResolved ? 'resolved' : meta.fileBugReport ? 'in-progress' : meta.suggestManualReport ? 'manual-report' : 'active';
+        const sessionSnap = await sessionRef.get();
+        if (!sessionSnap.exists) {
+          await sessionRef.set({
+            sessionId, uid: ctx.uid || 'anonymous', displayName: ctx.displayName || '',
+            startedAt: FieldValue.serverTimestamp(), lastMessageAt: FieldValue.serverTimestamp(),
+            status, model: useSonnet ? 'sonnet' : 'haiku', messages: allMessages,
+            context: ctx, bugReportId, resolution: meta.issueResolved ? parsed.message : null,
+            escalated: meta.escalateToSonnet || false, deviceInfo: di,
+          });
+        } else {
+          const existing = sessionSnap.data();
+          await sessionRef.update({
+            lastMessageAt: FieldValue.serverTimestamp(), status,
+            model: useSonnet ? 'sonnet' : 'haiku', messages: allMessages,
+            bugReportId: bugReportId || existing.bugReportId || null,
+            resolution: meta.issueResolved ? parsed.message : (existing.resolution || null),
+            escalated: meta.escalateToSonnet || existing.escalated || false,
+          });
+        }
+      } catch (e) { console.error('[Support] Session update failed:', e.message); }
+    }
+
+    res.json({
+      message: parsed.message,
+      metadata: {
+        fileBugReport: meta.fileBugReport || false,
+        escalateToSonnet: meta.escalateToSonnet || false,
+        issueResolved: meta.issueResolved || false,
+        suggestManualReport: meta.suggestManualReport || false,
+        bugReportSummary: meta.bugReportSummary || null,
+        bugReportId,
+      },
+    });
+  } catch (err) {
+    console.error('[Support] Chat error:', err);
+    res.status(500).json({ error: 'Support chat failed' });
+  }
+});
+
+// ── GET /api/admin/support/sessions — paginated sessions list ─────────────────
+app.get('/api/admin/support/sessions', verifyAdmin, async (req, res) => {
+  if (!adminDb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const status = req.query.status || null;
+    let q = adminDb.collection('support_sessions').orderBy('lastMessageAt', 'desc').limit(100);
+    if (status) q = q.where('status', '==', status);
+    const snap = await q.get();
+    const sessions = snap.docs.map(d => ({ id: d.id, ...d.data(), startedAt: d.data().startedAt?.toDate?.()?.toISOString() || null, lastMessageAt: d.data().lastMessageAt?.toDate?.()?.toISOString() || null }));
+    res.json({ sessions });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

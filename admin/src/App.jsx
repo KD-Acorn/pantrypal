@@ -9,6 +9,7 @@ import RecipesPage from './pages/RecipesPage';
 import CatalogPage from './pages/CatalogPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import PlaceholderPage from './pages/PlaceholderPage';
+import SupportPage from './pages/SupportPage';
 
 function Spinner() {
   return (
@@ -36,6 +37,7 @@ function AdminPanel() {
       case 'catalog': return <CatalogPage />;
       case 'bugs': return <BugReportsPage />;
       case 'analytics': return <AnalyticsPage />;
+      case 'support': return <SupportPage />;
       case 'settings': return <PlaceholderPage title="Settings" icon="⚙️" description="Admin panel configuration" />;
       default: return <DashboardPage />;
     }

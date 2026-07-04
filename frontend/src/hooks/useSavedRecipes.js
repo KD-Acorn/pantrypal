@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { collection, doc, setDoc, deleteDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, deleteDoc, updateDoc, onSnapshot, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import { trackEvent } from '../utils/analytics';
 
@@ -69,6 +69,7 @@ export default function useSavedRecipes(uid) {
       });
     } else {
       setDoc(doc(db, 'saved_recipes', uid, 'recipes', entry.id), entry);
+      updateDoc(doc(db, 'users', uid), { recipesCount: increment(1) });
     }
     trackEvent('recipe_save', { title: recipe.title }, uid);
   }, [uid]);
@@ -82,6 +83,7 @@ export default function useSavedRecipes(uid) {
       });
     } else {
       deleteDoc(doc(db, 'saved_recipes', uid, 'recipes', id));
+      updateDoc(doc(db, 'users', uid), { recipesCount: increment(-1) });
     }
   }, [uid]);
 

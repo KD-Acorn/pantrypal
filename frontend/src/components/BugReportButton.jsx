@@ -8,7 +8,25 @@ const TYPES = [
   { key: 'feedback', label: '💬 General Feedback' },
 ];
 
-export default function BugReportButton({ uid, currentTab, toast }) {
+function parseBrowser(ua) {
+  if (ua.includes('Chrome') && !ua.includes('Edg')) return 'Chrome';
+  if (ua.includes('Safari') && !ua.includes('Chrome')) return 'Safari';
+  if (ua.includes('Firefox')) return 'Firefox';
+  if (ua.includes('Edg')) return 'Edge';
+  if (ua.includes('Samsung')) return 'Samsung Internet';
+  return 'Unknown';
+}
+
+function parseOS(ua) {
+  if (ua.includes('iPhone') || ua.includes('iPad')) return 'iOS';
+  if (ua.includes('Android')) return 'Android';
+  if (ua.includes('Windows')) return 'Windows';
+  if (ua.includes('Mac')) return 'macOS';
+  if (ua.includes('Linux')) return 'Linux';
+  return 'Unknown';
+}
+
+export default function BugReportButton({ uid, currentTab, toast, pantry, saved }) {
   const [open, setOpen] = useState(false);
   const [type, setType] = useState('bug');
   const [desc, setDesc] = useState('');
@@ -17,15 +35,34 @@ export default function BugReportButton({ uid, currentTab, toast }) {
   async function handleSubmit() {
     if (desc.trim().length < 10) return;
     setSending(true);
+    const ua = navigator.userAgent;
+    const debugInfo = {
+      browser: parseBrowser(ua),
+      os: parseOS(ua),
+      deviceType: /mobile/i.test(ua) ? 'mobile' : /tablet/i.test(ua) ? 'tablet' : 'desktop',
+      screenResolution: `${window.screen.width}x${window.screen.height}`,
+      viewport: `${window.innerWidth}x${window.innerHeight}`,
+      pixelRatio: window.devicePixelRatio,
+      connectionType: navigator.connection?.effectiveType || 'unknown',
+      currentTab: currentTab || 'unknown',
+      pantryItemCount: pantry?.items?.length ?? 0,
+      savedRecipeCount: saved?.items?.length ?? 0,
+      appVersion: '1.0.0',
+      domain: window.location.hostname,
+      recentLogs: window.__mpcLogs || [],
+      recentErrors: window.__mpcErrors || [],
+      capturedAt: new Date().toISOString(),
+    };
     try {
       await addDoc(collection(db, 'bug_reports'), {
         type,
         description: desc.trim(),
         currentTab: currentTab || 'unknown',
         domain: window.location.hostname,
-        userAgent: navigator.userAgent,
+        userAgent: ua,
         uid: uid || 'anonymous',
         status: 'open',
+        debugInfo,
         timestamp: serverTimestamp(),
       });
       toast?.show('Thanks for your feedback!', 'success');

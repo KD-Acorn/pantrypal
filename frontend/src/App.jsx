@@ -26,10 +26,28 @@ import RecipesPage from './pages/RecipesPage';
 import DiscoverPage from './pages/DiscoverPage';
 import AuthPage from './pages/AuthPage';
 import BugReportButton from './components/BugReportButton';
+import SupportChatBubble from './components/SupportChatBubble';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { doc, getDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
 import { trackEvent } from './utils/analytics';
+
+// Capture last 20 console entries for bug reports
+if (!window.__mpcLogs) {
+  window.__mpcLogs = [];
+  const _orig = { log: console.log, warn: console.warn, error: console.error };
+  ['log', 'warn', 'error'].forEach(method => {
+    console[method] = (...args) => {
+      window.__mpcLogs.push({
+        level: method,
+        message: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '),
+        timestamp: new Date().toISOString(),
+      });
+      if (window.__mpcLogs.length > 20) window.__mpcLogs.shift();
+      _orig[method](...args);
+    };
+  });
+}
 
 function UserHeader({ onOpenSettings, householdName }) {
   const { currentUser } = useAuth();
@@ -152,6 +170,17 @@ function AppContent() {
   }, [currentUser?.uid]);
 
   useEffect(() => {
+    window.__mpcErrors = window.__mpcErrors || [];
+    const prevOnerror = window.onerror;
+    window.onerror = (message, source, lineno, colno, error) => {
+      window.__mpcErrors.push({ message, source, lineno, colno, stack: error?.stack, timestamp: new Date().toISOString() });
+      if (window.__mpcErrors.length > 10) window.__mpcErrors.shift();
+      return prevOnerror ? prevOnerror(message, source, lineno, colno, error) : false;
+    };
+    return () => { window.onerror = prevOnerror; };
+  }, []);
+
+  useEffect(() => {
     if (!currentUser) return;
     if (localStorage.getItem('pantrypal_onboarding_done') === 'true') return;
     const timer = setTimeout(async () => {
@@ -198,7 +227,8 @@ function AppContent() {
       {tab === 'pantry' && <PantryPage pantry={pantry} toast={toast} household={household} householdPantry={householdPantry} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} grocery={grocery} saved={saved} />}
       {tab === 'recipes' && <RecipesPage saved={saved} pantry={pantry} toast={toast} onSwitchTab={setTab} cookHistory={cookHistory} grocery={grocery} settings={settings} household={household} householdRecipes={householdRecipes} uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} mealPlan={mealPlan} householdMealPlan={householdMealPlan} userRecipes={userRecipes} />}
       {tab === 'discover' && <DiscoverPage pantry={pantry} toast={toast} saved={saved} cookHistory={cookHistory} settings={settings} rateLimit={rateLimit} grocery={grocery} userRecipes={userRecipes} household={household} displayName={settings.displayName || currentUser?.displayName || ''} />}
-      <BugReportButton uid={uid} currentTab={tab} toast={toast} />
+      <SupportChatBubble uid={uid} displayName={settings.displayName || currentUser?.displayName || ''} currentTab={tab} pantryItemCount={pantry.items.length} />
+      <BugReportButton uid={uid} currentTab={tab} toast={toast} pantry={pantry} saved={saved} />
       <Toast toast={toast.toast} />
       <BottomNav active={tab} onChange={(t) => { setTab(t); trackEvent('page_view', { tab: t }, uid); }} />
       {showSettings && (

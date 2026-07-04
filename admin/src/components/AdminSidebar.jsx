@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { key: 'recipes', icon: '🍽', label: 'Recipes' },
   { key: 'catalog', icon: '📚', label: 'Catalog' },
   { key: 'bugs', icon: '🐛', label: 'Bug Reports' },
+  { key: 'support', icon: '💬', label: 'Support' },
   { key: 'analytics', icon: '📈', label: 'Analytics' },
   { key: 'settings', icon: '⚙️', label: 'Settings' },
 ];
@@ -17,6 +18,7 @@ export default function AdminSidebar({ activePage, onNavigate }) {
   const { currentUser, signOut } = useAdminAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [openBugCount, setOpenBugCount] = useState(0);
+  const [activeSupportCount, setActiveSupportCount] = useState(0);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'bug_reports'), snap => {
@@ -25,6 +27,17 @@ export default function AdminSidebar({ activePage, onNavigate }) {
         return !s || s === 'open';
       }).length;
       setOpenBugCount(count);
+    }, () => {});
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'support_sessions'), snap => {
+      const count = snap.docs.filter(d => {
+        const s = d.data().status;
+        return !s || s === 'active' || s === 'in-progress';
+      }).length;
+      setActiveSupportCount(count);
     }, () => {});
     return unsub;
   }, []);
@@ -58,6 +71,12 @@ export default function AdminSidebar({ activePage, onNavigate }) {
                   background: '#ef4444', color: '#fff', borderRadius: '999px',
                   padding: '1px 7px', fontSize: 11, fontWeight: 700, marginLeft: 'auto',
                 }}>{openBugCount > 9 ? '9+' : openBugCount}</span>
+              )}
+              {item.key === 'support' && activeSupportCount > 0 && (
+                <span style={{
+                  background: '#3b82f6', color: '#fff', borderRadius: '999px',
+                  padding: '1px 7px', fontSize: 11, fontWeight: 700, marginLeft: 'auto',
+                }}>{activeSupportCount > 9 ? '9+' : activeSupportCount}</span>
               )}
             </button>
           );

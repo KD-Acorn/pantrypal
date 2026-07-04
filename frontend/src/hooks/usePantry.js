@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 
 // Key kept as "pantrypal_*" for backward compatibility
@@ -127,6 +127,7 @@ export default function usePantry(uid, options) {
         if (!exists) {
           const data = { ...entry, addedAt: new Date().toISOString() };
           setDoc(doc(db, 'pantry', uid, 'items', entry.id), data);
+          updateDoc(doc(db, 'users', uid), { pantryCount: increment(1) });
         }
       }
     }
@@ -153,6 +154,7 @@ export default function usePantry(uid, options) {
       if (!existing) {
         const id = withCat.id || genId();
         setDoc(doc(db, 'pantry', uid, 'items', id), { ...withCat, id, addedAt: new Date().toISOString() });
+        updateDoc(doc(db, 'users', uid), { pantryCount: increment(1) });
       } else if (mode === 'replace') {
         updateDoc(doc(db, 'pantry', uid, 'items', existing.id), withCat);
       } else if (mode === 'add') {
@@ -184,6 +186,7 @@ export default function usePantry(uid, options) {
         if (newQty <= 0) {
           handleDepletion(current);
           deleteDoc(doc(db, 'pantry', uid, 'items', id));
+          updateDoc(doc(db, 'users', uid), { pantryCount: increment(-1) });
           return;
         }
       }
@@ -200,6 +203,7 @@ export default function usePantry(uid, options) {
       });
     } else {
       deleteDoc(doc(db, 'pantry', uid, 'items', id));
+      updateDoc(doc(db, 'users', uid), { pantryCount: increment(-1) });
     }
   }, [uid]);
 
@@ -208,9 +212,11 @@ export default function usePantry(uid, options) {
       saveLocal([]);
       setItems([]);
     } else {
+      const count = itemsRef.current.length;
       const batch = writeBatch(db);
       itemsRef.current.forEach(i => batch.delete(doc(db, 'pantry', uid, 'items', i.id)));
       batch.commit();
+      if (count > 0) updateDoc(doc(db, 'users', uid), { pantryCount: increment(-count) });
     }
   }, [uid]);
 

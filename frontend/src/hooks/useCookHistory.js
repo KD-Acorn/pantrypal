@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, onSnapshot, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 
 // Keys kept as "pantrypal_*" for backward compatibility
@@ -41,6 +41,7 @@ export default function useCookHistory(uid) {
       });
     } else {
       setDoc(doc(db, 'cook_history', uid, 'entries', id), record);
+      updateDoc(doc(db, 'users', uid), { cookCount: increment(1) });
     }
   }, [uid]);
 

@@ -23,6 +23,14 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
   const [dupeActions, setDupeActions] = useState({});
   const [scanError, setScanError] = useState(null);
   const [barcodeManualInput, setBarcodeManualInput] = useState('');
+  const [lastBarcodeImg, setLastBarcodeImg] = useState(null); // { base64, mimeType }
+  const [barcodeRetryCount, setBarcodeRetryCount] = useState(0);
+  const [barcodeRetrying, setBarcodeRetrying] = useState(false);
+  const [showCorrectionForm, setShowCorrectionForm] = useState(false);
+  const [correctionName, setCorrectionName] = useState('');
+  const [correctionQty, setCorrectionQty] = useState(1);
+  const [correctionUnit, setCorrectionUnit] = useState('item');
+  const [correctionSaving, setCorrectionSaving] = useState(false);
   function handleTextAdd() {
     const names = textInput.split(',').map(s => s.trim()).filter(Boolean);
     if (names.length === 0) return;
@@ -62,19 +70,40 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
       if (!resp.ok) throw new Error('Scan failed');
       const data = await resp.json();
       const items = (data.ingredients || []).filter(Boolean);
-      if (items.length === 0) {
-        setScanError('photo');
-        return;
-      }
-      setPreview(items.map(i =>
+      const detectedBarcodes = data.detectedBarcodes || [];
+
+      let foodItems = items.map(i =>
         typeof i === 'string'
           ? { name: i, quantity: 1, unit: 'item', checked: true }
           : { name: i.name, quantity: i.quantity || 1, unit: UNITS.includes(i.unit) ? i.unit : 'item', checked: true }
-      ));
+      );
+
+      // Lookup any barcodes detected in the image and prepend as named items
+      if (detectedBarcodes.length > 0) {
+        const barcodeResults = await Promise.all(
+          detectedBarcodes.map(async (bc) => {
+            try {
+              const r = await fetch(`${API}/api/barcode-lookup?barcode=${bc}`);
+              if (!r.ok) return null;
+              const p = await r.json();
+              if (p.error) return null;
+              return { name: p.name, quantity: p.quantity || 1, unit: UNITS.includes(p.unit) ? p.unit : 'item', checked: true, source: 'barcode' };
+            } catch { return null; }
+          })
+        );
+        const validBarcodeItems = barcodeResults.filter(Boolean);
+        foodItems = [...validBarcodeItems, ...foodItems];
+      }
+
+      if (foodItems.length === 0) {
+        setScanError('photo');
+        return;
+      }
+      setPreview(foodItems);
       setBarcodeContext(null);
       setDupeActions({});
       if (rateLimit) rateLimit.increment('scan_camera');
-      trackEvent('scan_complete', { type: 'camera', items: items.length });
+      trackEvent('scan_complete', { type: 'camera', items: foodItems.length, barcodes: detectedBarcodes.length });
     } catch {
       toast.show('Scan failed — try adding ingredients manually', 'error');
     } finally {
@@ -128,8 +157,11 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     setBarcodeBanner(null);
     setScanError(null);
     setBarcodeManualInput('');
+    setShowCorrectionForm(false);
+    setBarcodeRetryCount(0);
     try {
       const base64 = await fileToBase64(file);
+      setLastBarcodeImg({ base64, mimeType: file.type || 'image/jpeg' });
       const resp = await fetch(`${API}/api/scan-barcode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -177,6 +209,73 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     } finally {
       setScanning(false);
       setScanMsg('');
+    }
+  }
+
+  async function retryBarcode() {
+    if (!lastBarcodeImg) return;
+    setBarcodeRetrying(true);
+    setScanError(null);
+    setBarcodeRetryCount(c => c + 1);
+    try {
+      const resp = await fetch(`${API}/api/scan-barcode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: lastBarcodeImg.base64, mimeType: lastBarcodeImg.mimeType }),
+      });
+      if (!resp.ok) throw new Error('Barcode scan failed');
+      const data = await resp.json();
+      if (data.error === 'no_barcode') { setScanError('no_barcode'); return; }
+      if (data.error === 'not_found') { setScanError('not_found'); setBarcodeManualInput(data.barcode || ''); return; }
+      if (data.error) { setScanError('scan_failed'); return; }
+      const items = (data.ingredients || []).filter(i => i && i.name);
+      if (items.length === 0) { setScanError('scan_failed'); return; }
+      setPreview(items.map(i => ({
+        name: i.name, quantity: i.quantity || 1,
+        unit: UNITS.includes(i.unit) ? i.unit : 'item', checked: true,
+      })));
+      setBarcodeContext({
+        barcode: data.barcode, originalName: data.productName,
+        itemSize: data.itemSize || null, communityVerified: data.communityVerified || false,
+        originalItems: items.map(i => ({ name: i.name, quantity: i.quantity || 1, unit: i.unit })),
+      });
+      setDupeActions({});
+      setBarcodeBanner({ productName: data.productName, brand: data.brand, communityVerified: data.communityVerified });
+      trackEvent('scan_complete', { type: 'barcode_retry', items: items.length });
+    } catch {
+      setScanError('scan_failed');
+    } finally {
+      setBarcodeRetrying(false);
+    }
+  }
+
+  async function handleSaveCorrection() {
+    if (!correctionName.trim() || !barcodeContext?.barcode) return;
+    setCorrectionSaving(true);
+    try {
+      await fetch(`${API}/api/scan-barcode/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          barcode: barcodeContext.barcode,
+          originalName: barcodeContext.originalName || '',
+          name: correctionName.trim(),
+          correctedName: correctionName.trim(),
+          quantity: correctionQty,
+          unit: correctionUnit,
+          uid: currentUser?.uid || 'anonymous',
+          needsReview: true,
+        }),
+      });
+      setPreview(prev => prev?.map((item, i) =>
+        i === 0 ? { ...item, name: correctionName.trim(), quantity: correctionQty, unit: correctionUnit } : item
+      ) || prev);
+      toast.show('Thanks! Your correction helps improve scanning for everyone.', 'success');
+      setShowCorrectionForm(false);
+    } catch {
+      toast.show('Could not save correction — please try again', 'error');
+    } finally {
+      setCorrectionSaving(false);
     }
   }
 
@@ -285,6 +384,69 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
           )}
         </div>
       )}
+      {barcodeContext?.barcode && !showCorrectionForm && (
+        <div style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginBottom: 10 }}>
+          Not the right product?{' '}
+          <button onClick={() => {
+            setCorrectionName(preview?.[0]?.name || '');
+            setCorrectionQty(preview?.[0]?.quantity || 1);
+            setCorrectionUnit(preview?.[0]?.unit || 'item');
+            setShowCorrectionForm(true);
+          }} style={{
+            background: 'none', border: 'none', color: '#10b981', fontWeight: 600,
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, padding: 0, textDecoration: 'underline',
+          }}>Edit & Report</button>
+        </div>
+      )}
+      {barcodeContext?.barcode && showCorrectionForm && (
+        <div style={{
+          background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 12,
+          padding: '14px 16px', marginBottom: 14,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+            What product did you actually scan?
+          </div>
+          <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 10 }}>
+            Barcode: {barcodeContext.barcode}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+            <input value={correctionName} onChange={e => setCorrectionName(e.target.value)}
+              placeholder="Corrected product name"
+              style={{
+                height: 36, border: '1px solid #e5e7eb', borderRadius: 8,
+                padding: '0 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none',
+              }} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type="number" min="1" value={correctionQty}
+                onChange={e => setCorrectionQty(Math.max(1, parseInt(e.target.value) || 1))}
+                style={{
+                  width: 60, height: 36, border: '1px solid #e5e7eb', borderRadius: 8,
+                  padding: '0 8px', fontSize: 13, fontFamily: 'inherit', outline: 'none', textAlign: 'center',
+                }} />
+              <select value={correctionUnit} onChange={e => setCorrectionUnit(e.target.value)}
+                style={{
+                  height: 36, border: '1px solid #e5e7eb', borderRadius: 8,
+                  padding: '0 8px', fontSize: 13, fontFamily: 'inherit', background: '#fff',
+                }}>
+                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setShowCorrectionForm(false)} style={{
+              flex: 1, height: 36, borderRadius: 8, border: '1px solid #e5e7eb',
+              background: '#fff', color: '#374151', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+            }}>Cancel</button>
+            <button onClick={handleSaveCorrection}
+              disabled={!correctionName.trim() || correctionSaving} style={{
+                flex: 2, height: 36, borderRadius: 8, border: 'none',
+                background: correctionName.trim() && !correctionSaving ? '#10b981' : '#d1d5db',
+                color: '#fff', fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                cursor: correctionName.trim() && !correctionSaving ? 'pointer' : 'default',
+              }}>{correctionSaving ? 'Saving...' : 'Save Correction'}</button>
+          </div>
+        </div>
+      )}
       <div style={{ fontSize: 14, fontWeight: 500, color: '#374151', marginBottom: 12 }}>
         Found {preview?.length || 0} ingredients — edit details and confirm:
       </div>
@@ -306,6 +468,12 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
                     flex: 1, height: 34, border: '1px solid #e5e7eb', borderRadius: 8,
                     padding: '0 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none',
                   }} />
+                {p.source === 'barcode' && (
+                  <span title="Identified via barcode" style={{
+                    fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 8,
+                    background: '#eff6ff', color: '#1d4ed8', flexShrink: 0,
+                  }}>📦</span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 8, paddingLeft: 26 }}>
                 <input type="number" min="1" value={p.quantity} onChange={e => updatePreviewItem(idx, { quantity: Math.max(1, parseInt(e.target.value) || 1) })}
@@ -449,11 +617,39 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
                   ⚠️ No barcode detected.<br />
                   Try better lighting or a clearer angle.
                 </div>
-                <button onClick={() => setScanError(null)} style={{
-                  height: 40, padding: '0 24px', borderRadius: 10, border: 'none',
-                  background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
-                  cursor: 'pointer', fontFamily: 'inherit',
-                }}>Try Again</button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => setScanError(null)} style={{
+                    height: 40, padding: '0 20px', borderRadius: 10, border: '1px solid #e5e7eb',
+                    background: '#fff', color: '#374151', fontSize: 13, fontWeight: 600,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}>Try Again</button>
+                  {lastBarcodeImg && barcodeRetryCount === 0 && (
+                    <button onClick={retryBarcode} disabled={barcodeRetrying} style={{
+                      height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
+                      background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+                      cursor: barcodeRetrying ? 'default' : 'pointer', fontFamily: 'inherit',
+                    }}>{barcodeRetrying ? 'Retrying...' : '🔄 Retry Same Image'}</button>
+                  )}
+                </div>
+                {barcodeRetryCount >= 1 && (
+                  <div style={{ width: '100%' }}>
+                    <input value={barcodeManualInput} onChange={e => setBarcodeManualInput(e.target.value)}
+                      placeholder="Enter product name manually"
+                      style={{
+                        width: '80%', height: 38, border: '1px solid #e5e7eb', borderRadius: 8,
+                        padding: '0 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none', textAlign: 'center',
+                      }} />
+                    <button onClick={() => {
+                      if (!barcodeManualInput.trim()) return;
+                      setPreview([{ name: barcodeManualInput.trim(), quantity: 1, unit: 'item', checked: true }]);
+                      setDupeActions({}); setScanError(null);
+                    }} disabled={!barcodeManualInput.trim()} style={{
+                      marginTop: 8, height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
+                      background: barcodeManualInput.trim() ? '#10b981' : '#d1d5db', color: '#fff',
+                      fontSize: 13, fontWeight: 600, cursor: barcodeManualInput.trim() ? 'pointer' : 'default', fontFamily: 'inherit',
+                    }}>Add Manually</button>
+                  </div>
+                )}
               </div>
             ) : scanError === 'not_found' ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
@@ -484,11 +680,40 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
                 <div style={{ fontSize: 14, color: '#b45309', lineHeight: 1.5 }}>
                   ⚠️ Barcode scan failed. Please try again.
                 </div>
-                <button onClick={() => setScanError(null)} style={{
-                  height: 40, padding: '0 24px', borderRadius: 10, border: 'none',
-                  background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
-                  cursor: 'pointer', fontFamily: 'inherit',
-                }}>Try Again</button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => setScanError(null)} style={{
+                    height: 40, padding: '0 20px', borderRadius: 10, border: '1px solid #e5e7eb',
+                    background: '#fff', color: '#374151', fontSize: 13, fontWeight: 600,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}>Try Again</button>
+                  {lastBarcodeImg && barcodeRetryCount === 0 && (
+                    <button onClick={retryBarcode} disabled={barcodeRetrying} style={{
+                      height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
+                      background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 600,
+                      cursor: barcodeRetrying ? 'default' : 'pointer', fontFamily: 'inherit',
+                    }}>{barcodeRetrying ? 'Retrying...' : '🔄 Retry Same Image'}</button>
+                  )}
+                </div>
+                {barcodeRetryCount >= 1 && (
+                  <div style={{ width: '100%' }}>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Enter product name manually:</div>
+                    <input value={barcodeManualInput} onChange={e => setBarcodeManualInput(e.target.value)}
+                      placeholder="Enter product name"
+                      style={{
+                        width: '80%', height: 38, border: '1px solid #e5e7eb', borderRadius: 8,
+                        padding: '0 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none', textAlign: 'center',
+                      }} />
+                    <button onClick={() => {
+                      if (!barcodeManualInput.trim()) return;
+                      setPreview([{ name: barcodeManualInput.trim(), quantity: 1, unit: 'item', checked: true }]);
+                      setDupeActions({}); setScanError(null);
+                    }} disabled={!barcodeManualInput.trim()} style={{
+                      marginTop: 8, height: 40, padding: '0 20px', borderRadius: 10, border: 'none',
+                      background: barcodeManualInput.trim() ? '#10b981' : '#d1d5db', color: '#fff',
+                      fontSize: 13, fontWeight: 600, cursor: barcodeManualInput.trim() ? 'pointer' : 'default', fontFamily: 'inherit',
+                    }}>Add Manually</button>
+                  </div>
+                )}
               </div>
             ) : scanSubMode === 'photo' ? (
               <>
