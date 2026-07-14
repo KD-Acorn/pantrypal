@@ -58,6 +58,51 @@ function SeedPanel({ title, note, running, onRun, onStop, logs, logsRef, stats }
   );
 }
 
+// Self-managing seed panel — owns its own running/logs/stats state and handles polling.
+// Caller only provides endpoint URLs, a token getter, optional stat formatter, and completion callback.
+// For panels that need custom request bodies (e.g. Spoonacular ingredients list), use the manual SeedPanel instead.
+function AutoSeedPanel({ title, note, getToken, runEndpoint, statusEndpoint, stopEndpoint, formatStats, onComplete }) {
+  const [running, setRunning] = useState(false);
+  const [logs, setLogs] = useState([]);
+  const [stats, setStats] = useState(null);
+  const pollRef = useRef(null);
+  const logsRef = useRef(null);
+
+  useEffect(() => {
+    if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
+  }, [logs]);
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  async function handleRun() {
+    const token = await getToken();
+    if (!token) return;
+    setRunning(true); setLogs(['Starting...']); setStats(null);
+    try { await fetch(runEndpoint, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch {}
+    pollRef.current = setInterval(async () => {
+      try {
+        const resp = await fetch(statusEndpoint, { headers: { Authorization: `Bearer ${token}` } });
+        const data = await resp.json();
+        setLogs(data.logs || []);
+        if (formatStats) setStats(formatStats(data));
+        if (!data.running) {
+          clearInterval(pollRef.current);
+          setRunning(false);
+          if (onComplete) onComplete();
+        }
+      } catch {}
+    }, 2000);
+  }
+
+  async function handleStop() {
+    const token = await getToken();
+    if (!token) return;
+    try { await fetch(stopEndpoint, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch {}
+  }
+
+  return <SeedPanel title={title} note={note} running={running} onRun={handleRun} onStop={handleStop} logs={logs} logsRef={logsRef} stats={stats} />;
+}
+
 const DEFAULT_INGREDIENTS = [
   'chicken breast', 'ground beef', 'eggs', 'salmon', 'shrimp', 'tofu', 'pork',
   'pasta', 'rice', 'garlic', 'onion', 'tomato', 'potato', 'broccoli',
@@ -96,17 +141,7 @@ export default function CatalogPage() {
   const [drinkCatFilter, setDrinkCatFilter] = useState('');
   const [drinkSearch, setDrinkSearch] = useState('');
 
-  const [cocktailRunning, setCocktailRunning] = useState(false);
-  const [cocktailLogs, setCocktailLogs] = useState([]);
-  const [cocktailStats, setCocktailStats] = useState(null);
-  const cocktailPollRef = useRef(null);
-  const cocktailLogsRef = useRef(null);
-
-  const [bevRunning, setBevRunning] = useState(false);
-  const [bevLogs, setBevLogs] = useState([]);
-  const [bevStats, setBevStats] = useState(null);
-  const bevPollRef = useRef(null);
-  const bevLogsRef = useRef(null);
+  const [tastyQuota, setTastyQuota] = useState(null);
 
   async function getToken() {
     return currentUser?.getIdToken?.() || null;
@@ -117,7 +152,7 @@ export default function CatalogPage() {
     setLoading(true);
     try {
       const snap = await getDocs(collection(db, 'recipe_catalog'));
-      const bySource = { spoonacular: 0, themealdb: 0, edamam: 0 };
+      const bySource = { spoonacular: 0, themealdb: 0, edamam: 0, tasty: 0 };
       let hasNutrition = 0;
       for (const d of snap.docs) {
         const data = d.data();
@@ -176,26 +211,27 @@ export default function CatalogPage() {
   }
 
   // ── Effects ────────────────────────────────────────────────────────────────
-  useEffect(() => { loadStats(); }, []);
+  async function loadTastyQuota() {
+    try {
+      const token = await getToken();
+      const resp = await fetch(`${API}/api/admin/tasty-quota`, { headers: { Authorization: `Bearer ${token}` } });
+      if (resp.ok) setTastyQuota(await resp.json());
+    } catch {}
+  }
+
+  useEffect(() => { loadStats(); loadTastyQuota(); }, []);
   useEffect(() => { loadRecipes(); }, [page, sourceFilter, search]);
   useEffect(() => {
     if (catalogTab === 'drinks') { loadDrinkStats(); loadDrinks(); }
+    loadTastyQuota();
   }, [catalogTab]);
   useEffect(() => { if (catalogTab === 'drinks') loadDrinks(); }, [drinkPage, drinkSourceFilter, drinkCatFilter, drinkSearch]);
 
   useEffect(() => {
     if (logsEndRef.current) logsEndRef.current.scrollTop = logsEndRef.current.scrollHeight;
   }, [seedLogs]);
-  useEffect(() => {
-    if (cocktailLogsRef.current) cocktailLogsRef.current.scrollTop = cocktailLogsRef.current.scrollHeight;
-  }, [cocktailLogs]);
-  useEffect(() => {
-    if (bevLogsRef.current) bevLogsRef.current.scrollTop = bevLogsRef.current.scrollHeight;
-  }, [bevLogs]);
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current);
-    if (cocktailPollRef.current) clearInterval(cocktailPollRef.current);
-    if (bevPollRef.current) clearInterval(bevPollRef.current);
   }, []);
 
   // ── Recipe seed handlers ───────────────────────────────────────────────────
@@ -228,62 +264,13 @@ export default function CatalogPage() {
     try { await fetch(`${API}/api/admin/seed-catalog/stop`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch {}
   }
 
-  // ── Cocktail seed handlers ─────────────────────────────────────────────────
-  async function handleSeedCocktails() {
-    const token = await getToken();
-    if (!token) return;
-    setCocktailRunning(true); setCocktailLogs(['Starting CocktailDB seed...']); setCocktailStats(null);
+  async function handleMoveToFood(id) {
     try {
-      await fetch(`${API}/api/admin/seed-cocktails`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
-    } catch {}
-    cocktailPollRef.current = setInterval(async () => {
-      try {
-        const resp = await fetch(`${API}/api/admin/seed-cocktails/status`, { headers: { Authorization: `Bearer ${token}` } });
-        const data = await resp.json();
-        setCocktailLogs(data.logs || []);
-        setCocktailStats(`Seeded: ${data.seeded} | Skipped: ${data.skipped} | Errors: ${data.errors}`);
-        if (!data.running) {
-          clearInterval(cocktailPollRef.current);
-          setCocktailRunning(false);
-          loadDrinkStats(); loadDrinks();
-        }
-      } catch {}
-    }, 2000);
-  }
-
-  async function handleStopCocktails() {
-    const token = await getToken();
-    if (!token) return;
-    try { await fetch(`${API}/api/admin/seed-cocktails/stop`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch {}
-  }
-
-  // ── Beverage seed handlers ─────────────────────────────────────────────────
-  async function handleSeedBeverages() {
-    const token = await getToken();
-    if (!token) return;
-    setBevRunning(true); setBevLogs(['Starting Tasty/Spoonacular beverage seed...']); setBevStats(null);
-    try {
-      await fetch(`${API}/api/admin/seed-beverages`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
-    } catch {}
-    bevPollRef.current = setInterval(async () => {
-      try {
-        const resp = await fetch(`${API}/api/admin/seed-beverages/status`, { headers: { Authorization: `Bearer ${token}` } });
-        const data = await resp.json();
-        setBevLogs(data.logs || []);
-        setBevStats(`Saved: ${data.saved} | Tasty requests: ${data.requestsUsed}`);
-        if (!data.running) {
-          clearInterval(bevPollRef.current);
-          setBevRunning(false);
-          loadDrinkStats(); loadDrinks();
-        }
-      } catch {}
-    }, 2000);
-  }
-
-  async function handleStopBeverages() {
-    const token = await getToken();
-    if (!token) return;
-    try { await fetch(`${API}/api/admin/seed-beverages/stop`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch {}
+      const token = await getToken();
+      const resp = await fetch(`${API}/api/admin/beverage-catalog/drinks/${id}/move-to-food`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+      if (resp.ok) { loadDrinks(); loadDrinkStats(); loadStats(); }
+      else { const d = await resp.json(); alert(d.error || 'Move failed'); }
+    } catch (err) { console.error(err); }
   }
 
   // ── Delete handlers ────────────────────────────────────────────────────────
@@ -327,6 +314,18 @@ export default function CatalogPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#111827', marginBottom: 4 }}>📚 Catalog Management</h1>
       <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 16 }}>Manage recipe and drink catalogs that serve content without live API calls.</p>
 
+      {/* Tasty quota banner */}
+      {tastyQuota && (
+        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 12, color: '#166534', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span>🌿 Tasty API:</span>
+          <strong>{tastyQuota.requestsUsed}/{tastyQuota.monthlyLimit} requests used this month</strong>
+          <span>· Safety cap: {tastyQuota.safetyCap} · Resets next month</span>
+          {tastyQuota.requestsUsed >= tastyQuota.safetyCap && (
+            <span style={{ background: '#fef2f2', color: '#dc2626', padding: '1px 8px', borderRadius: 6, fontWeight: 600, marginLeft: 4 }}>CAP REACHED</span>
+          )}
+        </div>
+      )}
+
       {/* Tab toggle */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 24, background: '#f3f4f6', borderRadius: 10, padding: 4, alignSelf: 'flex-start', width: 'fit-content' }}>
         {tabBtn('recipes', '🍽 Recipes')}
@@ -336,19 +335,23 @@ export default function CatalogPage() {
       {/* ── RECIPES TAB ─────────────────────────────────────────────────────── */}
       {catalogTab === 'recipes' && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, marginBottom: 24 }}>
             <StatCard icon="📦" label="Total Recipes" value={stats.total} loading={loading} />
             <StatCard icon="🥄" label="Spoonacular" value={stats.bySource.spoonacular || 0} loading={loading} />
             <StatCard icon="🍽" label="TheMealDB" value={stats.bySource.themealdb || 0} loading={loading} />
             <StatCard icon="🥗" label="Edamam" value={stats.bySource.edamam || 0} loading={loading} />
+            <StatCard icon="🌿" label="Tasty" value={stats.bySource.tasty || 0} loading={loading} />
             <StatCard icon="🧪" label="Has Nutrition" value={stats.hasNutrition} loading={loading} />
           </div>
 
-          <div style={{ background: '#fff', border: '1px solid #f0f0f0', borderRadius: 12, padding: 20, marginBottom: 24 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 4 }}>Seed Catalog</div>
-            <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 12 }}>
-              Fetch new recipes from Spoonacular and add to catalog. Uses ~45 Spoonacular points per run. Resets daily.
-            </div>
+          <div style={{ background: '#fff', border: '1px solid #f0f0f0', borderRadius: 12, padding: 20, marginBottom: 16 }}>
+            <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 16 }}>Seed Recipes</div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 4 }}>🥩 Spoonacular</div>
+              <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 12 }}>
+                Fetch new recipes from Spoonacular. Uses ~45 points per run. Resets daily.
+              </div>
             <textarea value={seedInput} onChange={e => setSeedInput(e.target.value)} rows={6} disabled={seedRunning}
               style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 12, fontFamily: 'monospace', resize: 'vertical', marginBottom: 10, boxSizing: 'border-box', color: '#374151' }} />
             <div style={{ display: 'flex', gap: 8 }}>
@@ -372,7 +375,21 @@ export default function CatalogPage() {
                 ))}
               </div>
             )}
-          </div>
+            </div>{/* end Spoonacular sub-section */}
+
+            <div style={{ borderTop: '1px solid #f3f4f6', paddingTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 4 }}>🌿 Tasty API</div>
+              <AutoSeedPanel
+                note="Tags: Dinner, Lunch, Breakfast, Desserts, Appetizers, Sides, Weeknight. Shares 500/month quota with beverage seeding. Requires RAPIDAPI_KEY."
+                getToken={getToken}
+                runEndpoint={`${API}/api/admin/seed-food-tasty`}
+                statusEndpoint={`${API}/api/admin/seed-food-tasty/status`}
+                stopEndpoint={`${API}/api/admin/seed-food-tasty/stop`}
+                formatStats={d => `Saved: ${d.saved} | Requests: ${d.requestsUsed} | Skipped: ${(d.skippedDuplicates || 0) + (d.skippedFiltered || 0)}`}
+                onComplete={() => { loadStats(); loadRecipes(); loadTastyQuota(); }}
+              />
+            </div>
+          </div>{/* end Seed Recipes card */}
 
           <div style={{ background: '#fff', border: '1px solid #f0f0f0', borderRadius: 12, padding: 20 }}>
             <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 12 }}>Browse Recipes</div>
@@ -385,6 +402,7 @@ export default function CatalogPage() {
                 <option value="spoonacular">Spoonacular</option>
                 <option value="themealdb">TheMealDB</option>
                 <option value="edamam">Edamam</option>
+                <option value="tasty">Tasty</option>
               </select>
             </div>
             <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8 }}>{recipesTotal} recipe{recipesTotal !== 1 ? 's' : ''} · Page {page} of {totalPages || 1}</div>
@@ -448,32 +466,32 @@ export default function CatalogPage() {
           {drinkStats && (
             <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 20 }}>
               Last cocktail seed: {fmtDate(drinkStats.lastCocktailSeed)} · Last beverage seed: {fmtDate(drinkStats.lastBeverageSeed)}
-              &nbsp;·&nbsp; Smoothie: {drinkStats.byCategory?.smoothie ?? 0} · Juice: {drinkStats.byCategory?.juice ?? 0} · Milkshake: {drinkStats.byCategory?.milkshake ?? 0} · Cocktail: {drinkStats.byCategory?.cocktail ?? 0}
+              &nbsp;·&nbsp; Smoothie: {drinkStats.byCategory?.smoothie ?? 0} · Juice: {drinkStats.byCategory?.juice ?? 0} · Milkshake: {drinkStats.byCategory?.milkshake ?? 0} · Cocktail: {drinkStats.byCategory?.cocktail ?? 0} · Other: {drinkStats.byCategory?.other ?? 0}
             </div>
           )}
 
           {/* Seed section */}
           <div style={{ background: '#fff', border: '1px solid #f0f0f0', borderRadius: 12, padding: 20, marginBottom: 24 }}>
             <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 16 }}>Seed Drinks</div>
-            <SeedPanel
+            <AutoSeedPanel
               title="🍸 Seed Cocktails (TheCocktailDB)"
-              note="Free, no rate limit — fetches entire A–Z catalog. Skip existing docs automatically."
-              running={cocktailRunning}
-              onRun={handleSeedCocktails}
-              onStop={handleStopCocktails}
-              logs={cocktailLogs}
-              logsRef={cocktailLogsRef}
-              stats={cocktailStats}
+              note="Free, no rate limit — fetches entire A–Z catalog. Skips existing docs automatically."
+              getToken={getToken}
+              runEndpoint={`${API}/api/admin/seed-cocktails`}
+              statusEndpoint={`${API}/api/admin/seed-cocktails/status`}
+              stopEndpoint={`${API}/api/admin/seed-cocktails/stop`}
+              formatStats={d => `Seeded: ${d.seeded} | Skipped: ${d.skipped} | Errors: ${d.errors}`}
+              onComplete={() => { loadDrinkStats(); loadDrinks(); }}
             />
-            <SeedPanel
+            <AutoSeedPanel
               title="🥤 Seed Smoothies / Juices / Milkshakes (Tasty API)"
-              note="Free tier — limited requests/month, seeding stops automatically when quota is hit. Requires RAPIDAPI_KEY in .env. Falls back to Spoonacular if key is missing."
-              running={bevRunning}
-              onRun={handleSeedBeverages}
-              onStop={handleStopBeverages}
-              logs={bevLogs}
-              logsRef={bevLogsRef}
-              stats={bevStats}
+              note="Limited requests/month — stops at safety cap. Savory items auto-routed to Food catalog. Requires RAPIDAPI_KEY. Falls back to Spoonacular if key is missing."
+              getToken={getToken}
+              runEndpoint={`${API}/api/admin/seed-beverages`}
+              statusEndpoint={`${API}/api/admin/seed-beverages/status`}
+              stopEndpoint={`${API}/api/admin/seed-beverages/stop`}
+              formatStats={d => `Saved: ${d.saved} | To Food: ${d.savedToFood || 0} | Requests: ${d.requestsUsed}`}
+              onComplete={() => { loadDrinkStats(); loadDrinks(); loadStats(); loadTastyQuota(); }}
             />
           </div>
 
@@ -490,6 +508,7 @@ export default function CatalogPage() {
                 <option value="smoothie">Smoothie</option>
                 <option value="juice">Juice</option>
                 <option value="milkshake">Milkshake</option>
+                <option value="other">Other Drinks</option>
               </select>
               <select value={drinkSourceFilter} onChange={e => { setDrinkSourceFilter(e.target.value); setDrinkPage(1); }}
                 style={{ height: 36, border: '1px solid #e5e7eb', borderRadius: 8, padding: '0 10px', fontSize: 13, fontFamily: 'inherit', color: '#374151' }}>
@@ -535,7 +554,8 @@ export default function CatalogPage() {
                           : <span style={{ fontSize: 10, color: '#22c55e' }}>✓</span>}
                       </td>
                       <td style={{ padding: 6, color: '#6b7280' }}>{d.useCount || 0}</td>
-                      <td style={{ padding: 6, textAlign: 'right' }}>
+                      <td style={{ padding: 6, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => handleMoveToFood(d.id)} style={{ fontSize: 11, color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', marginRight: 8 }}>→ Food</button>
                         <button onClick={() => handleDeleteDrink(d.id)} style={{ fontSize: 11, color: '#ef4444', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
                       </td>
                     </tr>

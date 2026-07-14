@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { contentSafetyCheck, hasDrinkSignal, inferCategory, SAVORY_PATTERNS } from '../utils/catalogClassifier.js';
+import { getUsage, recordUsage, wouldExceedSafetyCap, getTagOffset, setTagOffset, MONTHLY_LIMIT, SAFETY_CAP } from './tastyQuota.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '..', '..', '.env') });
@@ -17,67 +19,19 @@ const db = getFirestore();
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 const SPOONACULAR_KEY = process.env.SPOONACULAR_API_KEY;
 
-// Leave buffer below the RapidAPI free-tier limit (verify current limit on the listing page)
-const TASTY_REQUEST_LIMIT = 450;
-const PROGRESS_FILE = resolve(__dirname, 'seedBeveragesProgress.json');
-
 // Confirmed tag slugs via GET /tags/list on 2026-07-04:
-//   'smoothies_smoothie_bowls' → "Smoothies & Smoothie Bowls" (no standalone 'smoothies' tag exists)
-//   'shakes'                   → "Shakes" (no 'milkshakes' tag exists)
-//   'juices'                   → "Juices"
-//   'beverages'                → "Beverages" (breakfast category)
+//   smoothies_smoothie_bowls → "Smoothies & Smoothie Bowls"
+//   shakes                   → "Shakes" (no 'milkshakes' tag exists)
+//   juices                   → "Juices"
+//   beverages                → "Beverages" (breakfast category — mixed, needs drink-signal gate)
 const TASTY_TAGS = [
-  { slug: 'smoothies_smoothie_bowls', category: 'smoothie' },
-  { slug: 'shakes',                   category: 'milkshake' },
-  { slug: 'juices',                   category: 'juice' },
-  { slug: 'beverages',                category: 'smoothie' }, // mixed, infer per recipe
+  { slug: 'smoothies_smoothie_bowls', defaultCat: 'smoothie',  requireDrinkSignal: false },
+  { slug: 'shakes',                   defaultCat: 'milkshake', requireDrinkSignal: true  },
+  { slug: 'juices',                   defaultCat: 'juice',     requireDrinkSignal: false },
+  { slug: 'beverages',                defaultCat: 'smoothie',  requireDrinkSignal: true  },
 ];
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function loadProgress() {
-  try { return JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8')); }
-  catch { return { requestsUsed: 0, totalSaved: 0 }; }
-}
-function saveProgress(data) {
-  fs.writeFileSync(PROGRESS_FILE, JSON.stringify({ ...data, resumedAt: new Date().toISOString() }, null, 2));
-}
-
-// Returns a skip reason string if the recipe should be rejected, or null if it passes.
-// Limitation: title-based filtering only — Tasty has no 'is_beverage' flag.
-function contentFilterReason(recipe) {
-  const title = (recipe.name || '').toLowerCase();
-  const tagNames = (recipe.tags || []).map(t => (t.name || '').toLowerCase());
-
-  // Non-beverage food dishes that appear in drink-tagged results
-  const nonBeveragePatterns = [
-    'smoothie bowl', 'açaí bowl', 'acai bowl', 'smoothie bowls',
-    'baby food', 'puree', 'purée', 'toddler',
-  ];
-  for (const p of nonBeveragePatterns) {
-    if (title.includes(p)) return 'non-beverage';
-  }
-
-  // Baby food labeled with age ranges e.g. "9+ Months", "6-12 months"
-  if (/\d+\+?\s*(?:-\s*\d+\s*)?month/i.test(recipe.name || '')) return 'non-beverage';
-
-  // Tag-level baby food check
-  if (tagNames.some(t => t === 'baby_food' || t === 'baby-food' || t === 'baby')) return 'non-beverage';
-
-  // Skip clearly alcoholic content from non-cocktail tags
-  if (tagNames.some(t => t === 'cocktails' || t === 'alcohol' || t === 'alcoholic')) return 'non-beverage';
-
-  return null;
-}
-
-function inferCategory(recipe, defaultCategory) {
-  const tags = (recipe.tags || []).map(t => (t.name || '').toLowerCase());
-  const name = (recipe.name || '').toLowerCase();
-  if (name.includes('milkshake') || name.includes('milk shake') || tags.some(t => t === 'shakes')) return 'milkshake';
-  if (name.includes('smoothie')) return 'smoothie';
-  if (name.includes(' juice') || tags.some(t => t === 'juices')) return 'juice';
-  return defaultCategory;
-}
 
 function parseTastyRecipe(recipe, category) {
   const ingredients = (recipe.sections || []).flatMap(s =>
@@ -102,43 +56,72 @@ function parseTastyRecipe(recipe, category) {
   };
 }
 
+// Saves a Tasty recipe that failed the beverage check to recipe_catalog instead.
+// Returns true if saved, false if already exists or missing required data.
+async function saveToRecipeCatalog(recipe) {
+  const docId = `tst_${recipe.id}`;
+  const existing = await db.collection('recipe_catalog').doc(docId).get();
+  if (existing.exists) return false;
+  const ingredients = (recipe.sections || []).flatMap(s =>
+    (s.components || []).map(c => ({
+      amount: c.measurements?.[0]?.quantity ? parseFloat(c.measurements[0].quantity) || 1 : 1,
+      unit: c.measurements?.[0]?.unit?.name || 'item',
+      name: (c.ingredient?.name || '').toLowerCase().trim(),
+    })).filter(i => i.name)
+  );
+  const steps = (recipe.instructions || []).map(s => s.display_text).filter(Boolean);
+  if (!ingredients.length || !steps.length) return false;
+  const totalMins = recipe.total_time_minutes || recipe.prep_time_minutes || 30;
+  await db.collection('recipe_catalog').doc(docId).set({
+    id: docId, source: 'tasty', spoonacularId: null, mealDbId: null, tastyId: String(recipe.id),
+    title: recipe.name, description: (recipe.description || '').slice(0, 200),
+    cookTime: `${totalMins} min`,
+    difficulty: totalMins <= 20 ? 'Easy' : totalMins <= 45 ? 'Medium' : 'Hard',
+    cuisine: inferCategory(recipe, 'recipe', 'International'),
+    baseServings: recipe.num_servings || 4,
+    ingredients, indexedIngredients: ingredients.map(i => i.name).filter(Boolean), steps,
+    thumbnail: recipe.thumbnail_url || null,
+    tags: (recipe.tags || []).map(t => t.name).filter(Boolean),
+    fetchedAt: FieldValue.serverTimestamp(), useCount: 0,
+    nutrition: null, sourceUrl: null, avgRating: 0, ratingCount: 0, sourceData: {},
+  });
+  return true;
+}
+
 // ── Primary: Tasty API via RapidAPI ──────────────────────────────────────────
 async function seedFromTasty() {
   if (!RAPIDAPI_KEY) {
-    console.log('\n[BevSeed] ⚠️  RAPIDAPI_KEY not found in .env');
+    console.log('\n[BevSeed]  RAPIDAPI_KEY not found in .env');
     console.log('[BevSeed] Setup steps:');
     console.log('[BevSeed]   1. Sign up at https://rapidapi.com (free)');
     console.log('[BevSeed]   2. Search for "Tasty" and subscribe to the free tier');
-    console.log('[BevSeed]   3. Copy your RapidAPI key from the Tasty API dashboard');
-    console.log('[BevSeed]   4. Add to backend/.env:  RAPIDAPI_KEY=your_key_here');
+    console.log('[BevSeed]   3. Add to backend/.env:  RAPIDAPI_KEY=your_key_here');
     console.log('[BevSeed]   5. Rerun this script — falls through to Spoonacular until key is added\n');
     return { saved: 0, skippedDuplicates: 0, skippedFiltered: 0, skippedMissingData: 0, requestsUsed: 0, apiMissing: true, quotaHit: false };
   }
 
-  const progress = loadProgress();
-  let { requestsUsed, totalSaved } = progress;
-  let saved = 0, skippedDuplicates = 0, skippedFiltered = 0, skippedMissingData = 0;
-
-  console.log(`[BevSeed] Tasty seed starting — ${requestsUsed} requests used this month`);
-  console.log(`[BevSeed] Limit: ${TASTY_REQUEST_LIMIT} req/run (free tier — check RapidAPI for current limits)`);
+  const usage = getUsage();
+  console.log(`[BevSeed] Tasty usage this month: ${usage.requestsUsed}/${MONTHLY_LIMIT} (safety cap: ${SAFETY_CAP})`);
   console.log(`[BevSeed] Tags: ${TASTY_TAGS.map(t => t.slug).join(', ')}\n`);
 
-  for (const { slug, category: defaultCategory } of TASTY_TAGS) {
-    if (requestsUsed >= TASTY_REQUEST_LIMIT) {
-      console.log(`\n[BevSeed] Tasty quota reached (${requestsUsed} requests). Resume tomorrow.`);
-      saveProgress({ requestsUsed, totalSaved: totalSaved + saved });
-      return { saved, skippedDuplicates, skippedFiltered, skippedMissingData, requestsUsed, quotaHit: true };
+  let saved = 0, savedToFood = 0, skippedDuplicates = 0, skippedFiltered = 0, skippedMissingData = 0, requestsThisRun = 0;
+
+  for (const { slug, defaultCat, requireDrinkSignal } of TASTY_TAGS) {
+    if (wouldExceedSafetyCap(1)) {
+      const rem = MONTHLY_LIMIT - getUsage().requestsUsed;
+      console.log(`\n[BevSeed] Stopping — would exceed safety cap (${SAFETY_CAP}/${MONTHLY_LIMIT} used this month). Remaining: ${rem} requests. Resume next month or raise the cap manually.`);
+      return { saved, savedToFood, skippedDuplicates, skippedFiltered, skippedMissingData, requestsUsed: requestsThisRun, quotaHit: true };
     }
 
-    console.log(`[BevSeed] ── Tag: "${slug}" (default category: ${defaultCategory})`);
-    let from = 0;
-    let hasMore = true;
+    const resumeFrom = getTagOffset(slug);
+    console.log(`[BevSeed] ── Tag: "${slug}" (default category: ${defaultCat}, resuming from offset ${resumeFrom})`);
+    let from = resumeFrom, hasMore = true;
 
     while (hasMore) {
-      if (requestsUsed >= TASTY_REQUEST_LIMIT) {
-        console.log(`\n[BevSeed] Tasty quota reached mid-tag. Resume tomorrow.`);
-        saveProgress({ requestsUsed, totalSaved: totalSaved + saved });
-        return { saved, skippedDuplicates, skippedFiltered, skippedMissingData, requestsUsed, quotaHit: true };
+      if (wouldExceedSafetyCap(1)) {
+        const rem = MONTHLY_LIMIT - getUsage().requestsUsed;
+        console.log(`\n[BevSeed] Stopping mid-tag — safety cap reached. Remaining: ${rem}. Resume next month.`);
+        return { saved, savedToFood, skippedDuplicates, skippedFiltered, skippedMissingData, requestsUsed: requestsThisRun, quotaHit: true };
       }
 
       try {
@@ -146,22 +129,21 @@ async function seedFromTasty() {
           `https://tasty.p.rapidapi.com/recipes/list?from=${from}&size=20&tags=${encodeURIComponent(slug)}`,
           { headers: { 'x-rapidapi-host': 'tasty.p.rapidapi.com', 'x-rapidapi-key': RAPIDAPI_KEY } }
         );
-        requestsUsed++;
+        requestsThisRun++;
+        recordUsage('beverages', 1);
 
         if (resp.status === 429 || resp.status === 402) {
           console.log(`\n[BevSeed] Tasty quota exhausted (HTTP ${resp.status}). Resume tomorrow.`);
-          saveProgress({ requestsUsed, totalSaved: totalSaved + saved });
-          return { saved, skippedDuplicates, skippedFiltered, skippedMissingData, requestsUsed, quotaHit: true };
+          return { saved, skippedDuplicates, skippedFiltered, skippedMissingData, requestsUsed: requestsThisRun, quotaHit: true };
         }
         if (!resp.ok) {
           console.error(`[BevSeed] HTTP ${resp.status} for tag="${slug}" from=${from}`);
-          hasMore = false;
-          break;
+          hasMore = false; break;
         }
 
         const data = await resp.json();
         const results = data.results || [];
-        if (results.length === 0) { hasMore = false; break; }
+        if (results.length === 0) { hasMore = false; break; } // offset already persisted from previous iteration
 
         for (const recipe of results) {
           if (!recipe.name || !recipe.id) {
@@ -170,15 +152,31 @@ async function seedFromTasty() {
             continue;
           }
 
-          // Content filter
-          const filterReason = contentFilterReason(recipe);
-          if (filterReason) {
-            skippedFiltered++;
-            console.log(`[BevSeed] Skipped [non-beverage]: ${recipe.name}`);
+          const safetyReason = contentSafetyCheck(recipe, 'beverage');
+          if (safetyReason) {
+            const isSavory = SAVORY_PATTERNS.some(p => (recipe.name || '').toLowerCase().includes(p));
+            if (isSavory && !contentSafetyCheck(recipe, 'recipe')) {
+              const moved = await saveToRecipeCatalog(recipe);
+              if (moved) {
+                savedToFood++;
+                console.log(`[BevSeed] Moved to Food Catalog: ${recipe.name}`);
+              } else {
+                skippedDuplicates++;
+                console.log(`[BevSeed] Skipped [duplicate in food catalog]: ${recipe.name}`);
+              }
+            } else {
+              skippedFiltered++;
+              console.log(`[BevSeed] Skipped [non-beverage]: ${recipe.name}`);
+            }
             continue;
           }
 
-          // Duplicate check
+          if (requireDrinkSignal && !hasDrinkSignal(recipe)) {
+            skippedFiltered++;
+            console.log(`[BevSeed] Skipped [not drink-like]: ${recipe.name}`);
+            continue;
+          }
+
           const docId = `tasty_${recipe.id}`;
           const existing = await db.collection('beverage_catalog').doc(docId).get();
           if (existing.exists) {
@@ -187,7 +185,7 @@ async function seedFromTasty() {
             continue;
           }
 
-          const category = inferCategory(recipe, defaultCategory);
+          const category = inferCategory(recipe, 'beverage', defaultCat);
           const parsed = parseTastyRecipe(recipe, category);
 
           if (!parsed.ingredients.length || !parsed.steps.length) {
@@ -208,13 +206,13 @@ async function seedFromTasty() {
             fetchedAt: FieldValue.serverTimestamp(), useCount: 0, avgRating: 0, ratingCount: 0,
           });
           saved++;
-          totalSaved++;
           console.log(`[BevSeed] Saved [${category}]: ${parsed.title}`);
           await sleep(50);
         }
 
-        console.log(`[BevSeed] tag=${slug} from=${from}: ${results.length} results, req=${requestsUsed}, saved=${saved}, dupes=${skippedDuplicates}, filtered=${skippedFiltered}`);
+        console.log(`[BevSeed] tag=${slug} from=${from}: ${results.length} results, run-req=${requestsThisRun}, saved=${saved}, toFood=${savedToFood}, dupes=${skippedDuplicates}, filtered=${skippedFiltered}`);
         from += 20;
+        setTagOffset(slug, from); // persist after every page — never reset within the month
         hasMore = results.length === 20;
         await sleep(250);
       } catch (err) {
@@ -224,8 +222,7 @@ async function seedFromTasty() {
     }
   }
 
-  saveProgress({ requestsUsed, totalSaved: totalSaved + saved });
-  return { saved, skippedDuplicates, skippedFiltered, skippedMissingData, requestsUsed, quotaHit: false };
+  return { saved, savedToFood, skippedDuplicates, skippedFiltered, skippedMissingData, requestsUsed: requestsThisRun, quotaHit: false };
 }
 
 // ── Fallback: Spoonacular beverage queries ────────────────────────────────────
@@ -258,15 +255,17 @@ async function seedFromSpoonacular() {
           continue;
         }
 
-        const name = (r.title || '').toLowerCase();
-        const category = name.includes('milkshake') || name.includes('shake') ? 'milkshake'
-          : name.includes('juice') ? 'juice' : 'smoothie';
+        const safetyReason = contentSafetyCheck(r, 'beverage');
+        if (safetyReason) {
+          console.log(`[BevSeed] Skipped [non-beverage]: ${r.title}`);
+          continue;
+        }
 
+        const category = inferCategory(r, 'beverage', 'smoothie');
         const mins = r.readyInMinutes || 10;
         const ingredients = (r.extendedIngredients || []).map(ing => ({
           amount: Math.round((ing.amount || 1) * 100) / 100,
-          unit: ing.unit || 'item',
-          name: (ing.name || '').toLowerCase(),
+          unit: ing.unit || 'item', name: (ing.name || '').toLowerCase(),
         })).filter(i => i.name);
         const steps = r.analyzedInstructions?.[0]?.steps?.map(s => s.step) || ['Blend all ingredients until smooth.'];
         if (!ingredients.length) {
@@ -312,8 +311,7 @@ async function main() {
   console.log('[BevSeed] Complete!');
   const totalSaved = tasty.saved + spoon.saved;
   const totalDupes = tasty.skippedDuplicates + spoon.skippedDuplicates;
-  console.log(`[BevSeed] Done. Saved: ${totalSaved}, Skipped (duplicate): ${totalDupes}, Skipped (filtered): ${tasty.skippedFiltered || 0}, Tasty requests: ${tasty.requestsUsed}`);
-  if (tasty.requestsUsed) console.log(`[BevSeed]   Tasty requests:     ${tasty.requestsUsed}`);
+  console.log(`[BevSeed] Done. Saved: ${totalSaved}, Moved to Food: ${tasty.savedToFood || 0}, Skipped (duplicate): ${totalDupes}, Skipped (filtered): ${tasty.skippedFiltered || 0}, Tasty requests this run: ${tasty.requestsUsed}`);
   console.log(`[BevSeed]   Tasty saved:        ${tasty.saved}`);
   console.log(`[BevSeed]   Tasty dupes:        ${tasty.skippedDuplicates}`);
   console.log(`[BevSeed]   Tasty filtered:     ${tasty.skippedFiltered || 0}`);
@@ -322,6 +320,8 @@ async function main() {
     console.log(`[BevSeed]   Spoonacular saved: ${spoon.saved}`);
     console.log(`[BevSeed]   Spoon. points:     ${spoon.pointsUsed}`);
   }
+  const finalUsage = getUsage();
+  console.log(`[BevSeed]   Tasty monthly total: ${finalUsage.requestsUsed}/${MONTHLY_LIMIT}`);
   console.log('[BevSeed] ──────────────────────────────────────────');
   process.exit(0);
 }

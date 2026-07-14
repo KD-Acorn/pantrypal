@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url';
 import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
+import { getUsage, recordUsage, wouldExceedSafetyCap, getTagOffset, setTagOffset, MONTHLY_LIMIT, SAFETY_CAP } from './scripts/tastyQuota.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '..', '.env') });
@@ -39,7 +41,7 @@ app.use(cors({
     'https://www.mypantryclub.app',
     'https://admin.mypantryclub.com',
   ],
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -672,6 +674,11 @@ async function saveToCatalog(recipes, source) {
     try {
       if (!isValidRecipe(r)) {
         console.log('[Catalog] Rejected low-quality recipe:', r.title);
+        continue;
+      }
+      const recipeSkipReason = contentSafetyCheck(r, 'recipe');
+      if (recipeSkipReason) {
+        console.log(`[Catalog] Rejected (${recipeSkipReason}):`, r.title);
         continue;
       }
       const docId = source === 'spoonacular' ? String(r.spoonacularId)
@@ -1607,6 +1614,8 @@ async function saveToBeverageCatalog(drinks) {
   for (const d of drinks) {
     try {
       if (!isValidDrink(d)) { console.log('[BevCatalog] Rejected:', d.title); continue; }
+      const bevSkipReason = contentSafetyCheck(d, 'beverage');
+      if (bevSkipReason) { console.log(`[BevCatalog] Rejected (${bevSkipReason}):`, d.title); continue; }
       let docId;
       if (d.source === 'cocktaildb' && d.cocktailDbId) {
         docId = `cdb_${d.cocktailDbId}`;
@@ -2045,6 +2054,39 @@ app.delete('/api/admin/catalog/recipes/:id', verifyAdmin, async (req, res) => {
 // ── Admin routes — Beverage Catalog Management ───────────────────────────────
 
 let cocktailAdminState = { running: false, stop: false, logs: [], seeded: 0, skipped: 0, errors: 0 };
+// Saves a Tasty recipe that failed the beverage safety check to recipe_catalog.
+// Returns 'saved', 'duplicate', or 'missing-data'.
+async function saveTastyRecipeToFood(recipe) {
+  if (!adminDb) return 'missing-data';
+  const docId = `tst_${recipe.id}`;
+  const existing = await adminDb.collection('recipe_catalog').doc(docId).get();
+  if (existing.exists) return 'duplicate';
+  const ingredients = (recipe.sections || []).flatMap(s =>
+    (s.components || []).map(c => ({
+      amount: c.measurements?.[0]?.quantity ? parseFloat(c.measurements[0].quantity) || 1 : 1,
+      unit: c.measurements?.[0]?.unit?.name || 'item',
+      name: (c.ingredient?.name || '').toLowerCase().trim(),
+    })).filter(i => i.name)
+  );
+  const steps = (recipe.instructions || []).map(s => s.display_text).filter(Boolean);
+  if (!ingredients.length || !steps.length) return 'missing-data';
+  const totalMins = recipe.total_time_minutes || recipe.prep_time_minutes || 30;
+  await adminDb.collection('recipe_catalog').doc(docId).set({
+    id: docId, source: 'tasty', spoonacularId: null, mealDbId: null, tastyId: String(recipe.id),
+    title: recipe.name, description: (recipe.description || '').slice(0, 200),
+    cookTime: `${totalMins} min`,
+    difficulty: totalMins <= 20 ? 'Easy' : totalMins <= 45 ? 'Medium' : 'Hard',
+    cuisine: inferCategory(recipe, 'recipe', 'International'),
+    baseServings: recipe.num_servings || 4,
+    ingredients, indexedIngredients: ingredients.map(i => i.name).filter(Boolean), steps,
+    thumbnail: recipe.thumbnail_url || null,
+    tags: (recipe.tags || []).map(t => t.name).filter(Boolean),
+    fetchedAt: FieldValue.serverTimestamp(), useCount: 0,
+    nutrition: null, sourceUrl: null, avgRating: 0, ratingCount: 0, sourceData: {},
+  });
+  return 'saved';
+}
+
 let beverageSeedState = { running: false, stop: false, logs: [], saved: 0, requestsUsed: 0, errors: 0 };
 
 // ── POST /api/admin/seed-cocktails ────────────────────────────────────────────
@@ -2121,24 +2163,23 @@ app.post('/api/admin/seed-cocktails/stop', verifyAdmin, (_req, res) => {
 //   juices                   → "Juices"
 //   beverages                → "Beverages"
 const BEV_TASTY_TAGS = [
-  { slug: 'smoothies_smoothie_bowls', defaultCat: 'smoothie' },
-  { slug: 'shakes',                   defaultCat: 'milkshake' },
-  { slug: 'juices',                   defaultCat: 'juice' },
-  { slug: 'beverages',                defaultCat: 'smoothie' },
+  { slug: 'smoothies_smoothie_bowls', defaultCat: 'smoothie',  requireDrinkSignal: false },
+  { slug: 'shakes',                   defaultCat: 'milkshake', requireDrinkSignal: true  },
+  { slug: 'juices',                   defaultCat: 'juice',     requireDrinkSignal: false },
+  { slug: 'beverages',                defaultCat: 'smoothie',  requireDrinkSignal: true  },
 ];
 
-function bevContentFilterReason(recipe) {
-  const title = (recipe.name || '').toLowerCase();
-  const tagNames = (recipe.tags || []).map(t => (t.name || '').toLowerCase());
-  const nonBeveragePatterns = ['smoothie bowl', 'açaí bowl', 'acai bowl', 'smoothie bowls', 'baby food', 'puree', 'purée', 'toddler'];
-  for (const p of nonBeveragePatterns) {
-    if (title.includes(p)) return 'non-beverage';
-  }
-  if (/\d+\+?\s*(?:-\s*\d+\s*)?month/i.test(recipe.name || '')) return 'non-beverage';
-  if (tagNames.some(t => t === 'baby_food' || t === 'baby-food' || t === 'baby')) return 'non-beverage';
-  if (tagNames.some(t => t === 'cocktails' || t === 'alcohol' || t === 'alcoholic')) return 'non-beverage';
-  return null;
-}
+// Confirmed Tasty food tag slugs (verified via /tags/list on 2026-07-04).
+// Food and beverage seeding share the same 500/month Tasty quota (see tastyQuota.js).
+const FOOD_TASTY_TAGS = [
+  { slug: 'dinner',     label: 'Dinner' },
+  { slug: 'lunch',      label: 'Lunch' },
+  { slug: 'breakfast',  label: 'Breakfast' },
+  { slug: 'desserts',   label: 'Desserts' },
+  { slug: 'appetizers', label: 'Appetizers' },
+  { slug: 'sides',      label: 'Sides' },
+  { slug: 'weeknight',  label: 'Weeknight' },
+];
 
 app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
   if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
@@ -2147,14 +2188,16 @@ app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
   const rapidKey = process.env.RAPIDAPI_KEY;
   const spoonKey = process.env.SPOONACULAR_API_KEY;
 
-  beverageSeedState = { running: true, stop: false, logs: [], saved: 0, requestsUsed: 0, skippedDuplicates: 0, skippedFiltered: 0, errors: 0 };
+  beverageSeedState = { running: true, stop: false, logs: [], saved: 0, savedToFood: 0, requestsUsed: 0, skippedDuplicates: 0, skippedFiltered: 0, errors: 0 };
   res.json({ started: true, hasTasty: !!rapidKey });
 
   const sleepMs = ms => new Promise(r => setTimeout(r, ms));
-  const TASTY_LIMIT = 450;
 
   if (!rapidKey) {
     beverageSeedState.logs.push('RAPIDAPI_KEY not set — falling back to Spoonacular.');
+  } else {
+    const usage = getUsage();
+    beverageSeedState.logs.push(`Tasty usage this month: ${usage.requestsUsed}/${MONTHLY_LIMIT} (safety cap: ${SAFETY_CAP})`);
   }
 
   (async () => {
@@ -2162,17 +2205,23 @@ app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
     if (rapidKey && !beverageSeedState.stop) {
       beverageSeedState.logs.push(`Tasty API: tags = ${BEV_TASTY_TAGS.map(t => t.slug).join(', ')}`);
 
-      for (const { slug, defaultCat } of BEV_TASTY_TAGS) {
-        if (beverageSeedState.stop || beverageSeedState.requestsUsed >= TASTY_LIMIT) break;
-        let from = 0, hasMore = true;
+      for (const { slug, defaultCat, requireDrinkSignal } of BEV_TASTY_TAGS) {
+        if (beverageSeedState.stop || wouldExceedSafetyCap(1)) {
+          if (wouldExceedSafetyCap(1)) beverageSeedState.logs.push(`Safety cap reached (${SAFETY_CAP}/${MONTHLY_LIMIT}). Stopping.`);
+          break;
+        }
+        const resumeFrom = getTagOffset(slug);
+        beverageSeedState.logs.push(`Tag "${slug}": resuming from offset ${resumeFrom}`);
+        let from = resumeFrom, hasMore = true;
 
-        while (hasMore && !beverageSeedState.stop && beverageSeedState.requestsUsed < TASTY_LIMIT) {
+        while (hasMore && !beverageSeedState.stop && !wouldExceedSafetyCap(1)) {
           try {
             const resp = await fetch(
               `https://tasty.p.rapidapi.com/recipes/list?from=${from}&size=20&tags=${encodeURIComponent(slug)}`,
               { headers: { 'x-rapidapi-host': 'tasty.p.rapidapi.com', 'x-rapidapi-key': rapidKey } }
             );
             beverageSeedState.requestsUsed++;
+            recordUsage('beverages', 1);
 
             if (resp.status === 429 || resp.status === 402) {
               beverageSeedState.logs.push(`Tasty quota exhausted (HTTP ${resp.status}). Resume tomorrow.`);
@@ -2182,7 +2231,7 @@ app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
 
             const data = await resp.json();
             const results = data.results || [];
-            if (!results.length) { hasMore = false; break; }
+            if (!results.length) { hasMore = false; break; } // offset already persisted from previous iteration
 
             for (const recipe of results) {
               if (!recipe.name || !recipe.id) {
@@ -2190,10 +2239,28 @@ app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
                 continue;
               }
 
-              const filterReason = bevContentFilterReason(recipe);
-              if (filterReason) {
+              const safetyReason = contentSafetyCheck(recipe, 'beverage');
+              if (safetyReason) {
+                const isSavory = SAVORY_PATTERNS.some(p => (recipe.name || '').toLowerCase().includes(p));
+                if (isSavory && !contentSafetyCheck(recipe, 'recipe')) {
+                  const result = await saveTastyRecipeToFood(recipe);
+                  if (result === 'saved') {
+                    beverageSeedState.savedToFood++;
+                    beverageSeedState.logs.push(`Moved to Food Catalog: ${recipe.name}`);
+                  } else if (result === 'duplicate') {
+                    beverageSeedState.skippedDuplicates++;
+                    beverageSeedState.logs.push(`Skipped [duplicate in food catalog]: ${recipe.name}`);
+                  }
+                } else {
+                  beverageSeedState.skippedFiltered++;
+                  beverageSeedState.logs.push(`Skipped [non-beverage]: ${recipe.name}`);
+                }
+                continue;
+              }
+
+              if (requireDrinkSignal && !hasDrinkSignal(recipe)) {
                 beverageSeedState.skippedFiltered++;
-                beverageSeedState.logs.push(`Skipped [non-beverage]: ${recipe.name}`);
+                beverageSeedState.logs.push(`Skipped [not drink-like]: ${recipe.name}`);
                 continue;
               }
 
@@ -2205,12 +2272,7 @@ app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
                 continue;
               }
 
-              const name = (recipe.name || '').toLowerCase();
-              const tagNames = (recipe.tags || []).map(t => (t.name || '').toLowerCase());
-              const category = name.includes('milkshake') || name.includes('shake') ? 'milkshake'
-                : name.includes('smoothie') ? 'smoothie'
-                : name.includes(' juice') || tagNames.some(t => t === 'juices') ? 'juice'
-                : defaultCat;
+              const category = inferCategory(recipe, 'beverage', defaultCat);
 
               const ingredients = (recipe.sections || []).flatMap(s =>
                 (s.components || []).map(c => ({
@@ -2242,8 +2304,9 @@ app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
               await sleepMs(50);
             }
 
-            beverageSeedState.logs.push(`tag=${slug} from=${from}: ${results.length} results, req=${beverageSeedState.requestsUsed}, saved=${beverageSeedState.saved}, dupes=${beverageSeedState.skippedDuplicates}, filtered=${beverageSeedState.skippedFiltered}`);
+            beverageSeedState.logs.push(`tag=${slug} from=${from}: ${results.length} results, req=${beverageSeedState.requestsUsed}, saved=${beverageSeedState.saved}, toFood=${beverageSeedState.savedToFood}, dupes=${beverageSeedState.skippedDuplicates}, filtered=${beverageSeedState.skippedFiltered}`);
             from += 20;
+            setTagOffset(slug, from); // persist after every page — never reset within the month
             hasMore = results.length === 20;
             await sleepMs(250);
           } catch (err) {
@@ -2316,7 +2379,7 @@ app.post('/api/admin/seed-beverages', verifyAdmin, async (req, res) => {
     }
 
     beverageSeedState.running = false;
-    beverageSeedState.logs.push(`Done. Saved: ${beverageSeedState.saved}, Skipped (duplicate): ${beverageSeedState.skippedDuplicates}, Skipped (filtered): ${beverageSeedState.skippedFiltered}, Tasty requests: ${beverageSeedState.requestsUsed}`);
+    beverageSeedState.logs.push(`Done. Saved: ${beverageSeedState.saved}, Moved to Food: ${beverageSeedState.savedToFood}, Skipped (duplicate): ${beverageSeedState.skippedDuplicates}, Skipped (filtered): ${beverageSeedState.skippedFiltered}, Tasty requests: ${beverageSeedState.requestsUsed}`);
   })().catch(err => { beverageSeedState.running = false; beverageSeedState.logs.push(`Fatal: ${err.message}`); });
 });
 
@@ -2326,12 +2389,183 @@ app.post('/api/admin/seed-beverages/stop', verifyAdmin, (_req, res) => {
   res.json({ stopped: true });
 });
 
+// ── GET /api/admin/tasty-quota ────────────────────────────────────────────────
+app.get('/api/admin/tasty-quota', verifyAdmin, (_req, res) => {
+  try { res.json({ ...getUsage(), monthlyLimit: MONTHLY_LIMIT, safetyCap: SAFETY_CAP }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/admin/seed-food-tasty — Seed recipe_catalog from Tasty food tags ─
+let foodTastyState = { running: false, stop: false, logs: [], saved: 0, requestsUsed: 0, skippedDuplicates: 0, skippedFiltered: 0, errors: 0 };
+
+app.post('/api/admin/seed-food-tasty', verifyAdmin, async (req, res) => {
+  if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
+  if (foodTastyState.running) return res.json({ error: 'Food Tasty seed already running' });
+
+  const rapidKey = process.env.RAPIDAPI_KEY;
+  if (!rapidKey) return res.status(400).json({ error: 'RAPIDAPI_KEY not set' });
+
+  foodTastyState = { running: true, stop: false, logs: [], saved: 0, requestsUsed: 0, skippedDuplicates: 0, skippedFiltered: 0, errors: 0 };
+  res.json({ started: true });
+
+  const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+  const usage = getUsage();
+  foodTastyState.logs.push(`Tasty usage this month: ${usage.requestsUsed}/${MONTHLY_LIMIT} (safety cap: ${SAFETY_CAP})`);
+  foodTastyState.logs.push(`Tags: ${FOOD_TASTY_TAGS.map(t => t.slug).join(', ')}`);
+
+  (async () => {
+    for (const { slug } of FOOD_TASTY_TAGS) {
+      if (foodTastyState.stop || wouldExceedSafetyCap(1)) {
+        if (wouldExceedSafetyCap(1)) foodTastyState.logs.push(`Safety cap reached (${SAFETY_CAP}/${MONTHLY_LIMIT}). Stopping.`);
+        break;
+      }
+      let from = 0, hasMore = true;
+
+      while (hasMore && !foodTastyState.stop && !wouldExceedSafetyCap(1)) {
+        try {
+          const resp = await fetch(
+            `https://tasty.p.rapidapi.com/recipes/list?from=${from}&size=20&tags=${encodeURIComponent(slug)}`,
+            { headers: { 'x-rapidapi-host': 'tasty.p.rapidapi.com', 'x-rapidapi-key': rapidKey } }
+          );
+          foodTastyState.requestsUsed++;
+          recordUsage('food', 1);
+
+          if (resp.status === 429 || resp.status === 402) {
+            foodTastyState.logs.push(`Tasty quota exhausted (HTTP ${resp.status}). Resume tomorrow.`);
+            foodTastyState.stop = true; break;
+          }
+          if (!resp.ok) { foodTastyState.errors++; hasMore = false; break; }
+
+          const data = await resp.json();
+          const results = data.results || [];
+          if (!results.length) { hasMore = false; break; }
+
+          for (const recipe of results) {
+            if (!recipe.name || !recipe.id) {
+              foodTastyState.logs.push('Skipped [missing data]: (no name/id)');
+              continue;
+            }
+
+            const safetyReason = contentSafetyCheck(recipe, 'recipe');
+            if (safetyReason) {
+              foodTastyState.skippedFiltered++;
+              foodTastyState.logs.push(`Skipped [${safetyReason}]: ${recipe.name}`);
+              continue;
+            }
+
+            const docId = `tst_${recipe.id}`;
+            const existing = await adminDb.collection('recipe_catalog').doc(docId).get();
+            if (existing.exists) {
+              foodTastyState.skippedDuplicates++;
+              foodTastyState.logs.push(`Skipped [duplicate]: ${recipe.name}`);
+              continue;
+            }
+
+            const totalMins = recipe.total_time_minutes || recipe.prep_time_minutes || 30;
+            const cuisine = inferCategory(recipe, 'recipe', 'International');
+            const ingredients = (recipe.sections || []).flatMap(s =>
+              (s.components || []).map(c => ({
+                amount: c.measurements?.[0]?.quantity ? parseFloat(c.measurements[0].quantity) || 1 : 1,
+                unit: c.measurements?.[0]?.unit?.name || 'item',
+                name: (c.ingredient?.name || '').toLowerCase().trim(),
+              })).filter(i => i.name)
+            );
+            const steps = (recipe.instructions || []).map(s => s.display_text).filter(Boolean);
+            if (!ingredients.length || !steps.length) {
+              foodTastyState.logs.push(`Skipped [missing data]: ${recipe.name} (no ingredients or steps)`);
+              continue;
+            }
+
+            await adminDb.collection('recipe_catalog').doc(docId).set({
+              id: docId, source: 'tasty', spoonacularId: null, mealDbId: null, tastyId: String(recipe.id),
+              title: recipe.name,
+              description: (recipe.description || '').slice(0, 200),
+              cookTime: `${totalMins} min`,
+              difficulty: totalMins <= 20 ? 'Easy' : totalMins <= 45 ? 'Medium' : 'Hard',
+              cuisine,
+              baseServings: recipe.num_servings || 4,
+              ingredients, indexedIngredients: ingredients.map(i => i.name).filter(Boolean), steps,
+              thumbnail: recipe.thumbnail_url || null,
+              tags: (recipe.tags || []).map(t => t.name).filter(Boolean),
+              fetchedAt: FieldValue.serverTimestamp(), useCount: 0,
+              nutrition: null, sourceUrl: null,
+              avgRating: 0, ratingCount: 0, sourceData: {},
+            });
+            foodTastyState.saved++;
+            foodTastyState.logs.push(`Saved [${cuisine}]: ${recipe.name}`);
+            await sleepMs(50);
+          }
+
+          foodTastyState.logs.push(`tag=${slug} from=${from}: ${results.length} results, req=${foodTastyState.requestsUsed}, saved=${foodTastyState.saved}`);
+          from += 20;
+          hasMore = results.length === 20;
+          await sleepMs(250);
+        } catch (err) {
+          foodTastyState.errors++;
+          foodTastyState.logs.push(`Error tag=${slug}: ${err.message}`);
+          hasMore = false;
+        }
+      }
+    }
+
+    const finalUsage = getUsage();
+    foodTastyState.running = false;
+    foodTastyState.logs.push(`Done. Saved: ${foodTastyState.saved}, Skipped (duplicate): ${foodTastyState.skippedDuplicates}, Skipped (filtered): ${foodTastyState.skippedFiltered}, Tasty requests: ${foodTastyState.requestsUsed}`);
+    foodTastyState.logs.push(`Tasty monthly total: ${finalUsage.requestsUsed}/${MONTHLY_LIMIT}`);
+  })().catch(err => { foodTastyState.running = false; foodTastyState.logs.push(`Fatal: ${err.message}`); });
+});
+
+app.get('/api/admin/seed-food-tasty/status', verifyAdmin, (_req, res) => res.json(foodTastyState));
+app.post('/api/admin/seed-food-tasty/stop', verifyAdmin, (_req, res) => {
+  foodTastyState.stop = true;
+  res.json({ stopped: true });
+});
+
+// ── POST /api/admin/beverage-catalog/drinks/:id/move-to-food ──────────────────
+app.post('/api/admin/beverage-catalog/drinks/:id/move-to-food', verifyAdmin, async (req, res) => {
+  if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
+  try {
+    const bevDoc = await adminDb.collection('beverage_catalog').doc(req.params.id).get();
+    if (!bevDoc.exists) return res.status(404).json({ error: 'Not found in beverage_catalog' });
+
+    const d = bevDoc.data();
+    const newId = d.tastyId ? `tst_${d.tastyId}` : `moved_${req.params.id}`;
+    const totalMins = parseInt((d.prepTime || '30 min').replace(/[^0-9]/g, '')) || 30;
+
+    const existing = await adminDb.collection('recipe_catalog').doc(newId).get();
+    if (!existing.exists) {
+      await adminDb.collection('recipe_catalog').doc(newId).set({
+        id: newId,
+        source: d.source === 'tasty' ? 'tasty' : 'catalog',
+        spoonacularId: null, mealDbId: null,
+        tastyId: d.tastyId || null,
+        title: d.title, description: d.description || '',
+        cookTime: d.prepTime || '30 min',
+        difficulty: totalMins <= 20 ? 'Easy' : totalMins <= 45 ? 'Medium' : 'Hard',
+        cuisine: inferCategory(d, 'recipe', 'International'),
+        baseServings: d.baseServings || 4,
+        ingredients: d.ingredients || [],
+        indexedIngredients: d.indexedIngredients || [],
+        steps: d.steps || [],
+        thumbnail: d.thumbnail || null,
+        tags: d.tags || [],
+        fetchedAt: FieldValue.serverTimestamp(), useCount: d.useCount || 0,
+        nutrition: null, sourceUrl: null,
+        avgRating: 0, ratingCount: 0, sourceData: {},
+      });
+    }
+
+    await adminDb.collection('beverage_catalog').doc(req.params.id).delete();
+    res.json({ moved: true, newId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── GET /api/admin/beverage-catalog/stats ─────────────────────────────────────
 app.get('/api/admin/beverage-catalog/stats', verifyAdmin, async (_req, res) => {
   try {
     const snap = await adminDb.collection('beverage_catalog').get();
     const bySource = { cocktaildb: 0, tasty: 0, spoonacular: 0, ai: 0, other: 0 };
-    const byCategory = { cocktail: 0, smoothie: 0, juice: 0, milkshake: 0 };
+    const byCategory = { cocktail: 0, smoothie: 0, juice: 0, milkshake: 0, other: 0 };
     let alcoholic = 0, nonAlcoholic = 0;
     for (const d of snap.docs) {
       const data = d.data();

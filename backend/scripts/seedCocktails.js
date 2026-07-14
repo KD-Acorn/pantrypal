@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { contentSafetyCheck } from '../utils/catalogClassifier.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '..', '..', '.env') });
@@ -97,6 +98,13 @@ async function seed() {
           const parsed = parseDrink(drink);
           if (!parsed.title || parsed.ingredients.length < 1) {
             console.log(`[DrinkSeed] Skipping invalid: ${drink.strDrink}`);
+            skipped++;
+            continue;
+          }
+
+          const safetyReason = contentSafetyCheck({ title: parsed.title, tags: parsed.tags, ingredients: parsed.ingredients }, 'beverage');
+          if (safetyReason) {
+            console.log(`[DrinkSeed] Skipped [safety backstop - ${safetyReason}]: ${parsed.title}`);
             skipped++;
             continue;
           }

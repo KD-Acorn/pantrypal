@@ -1,0 +1,257 @@
+{
+  "monthKey": "2026-07",
+  "requestsUsed": 68,
+  "lastUpdated": "2026-07-05T03:30:53.535Z",
+  "log": [
+    {
+      "date": "2026-07-04T00:00:00.000Z",
+      "script": "beverages",
+      "requests": 20
+    },
+    {
+      "date": "2026-07-05T00:57:51.835Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:57:54.815Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:57:57.002Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:57:58.976Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:01.445Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:03.927Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:05.373Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:07.219Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:09.124Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:11.301Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:12.708Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:14.808Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:16.038Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:17.197Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:18.838Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:20.385Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:22.959Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:24.891Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:26.609Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:28.483Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T00:58:30.108Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:07.716Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:10.639Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:12.910Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:15.129Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:17.300Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:19.463Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:21.102Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:23.251Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:30.427Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:16:32.905Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:17:49.850Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:17:52.579Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:17:54.394Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:17:56.931Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:17:58.614Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:18:00.347Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:18:01.599Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:18:03.511Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:18:05.062Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:18:07.254Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:18:09.347Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:18:10.137Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T01:18:11.597Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T03:30:50.661Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T03:30:51.379Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T03:30:52.353Z",
+      "script": "beverages",
+      "requests": 1
+    },
+    {
+      "date": "2026-07-05T03:30:53.535Z",
+      "script": "beverages",
+      "requests": 1
+    }
+  ],
+  "tagOffsets": {
+    "smoothies_smoothie_bowls": 0,
+    "shakes": 0,
+    "juices": 0
+  }
+}
