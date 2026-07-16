@@ -1,0 +1,30 @@
+[
+  {
+    "version": "3.0.1",
+    "date": "2026-07-16",
+    "type": "patch",
+    "title": "Photo scan fixes",
+    "summary": "Photo scans are more reliable now — faster uploads and clearer error messages when something goes wrong."
+  },
+  {
+    "version": "3.0.0",
+    "date": "2026-07-14",
+    "type": "major",
+    "title": "Drinks + install as an app",
+    "summary": "New Drinks tab for AI-suggested smoothies, juices, milkshakes, and cocktails. Plus, install My Pantry Club right on your home screen."
+  },
+  {
+    "version": "2.0.0",
+    "date": "2026-06-28",
+    "type": "major",
+    "title": "Households",
+    "summary": "Share your pantry, recipes, and meal plan with family members, with a live activity feed."
+  },
+  {
+    "version": "1.0.0",
+    "date": "2026-06-23",
+    "type": "major",
+    "title": "My Pantry Club launches",
+    "summary": "Initial release — pantry scanning and AI recipe discovery."
+  }
+]
