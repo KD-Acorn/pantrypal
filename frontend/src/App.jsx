@@ -6,6 +6,7 @@ import MigrationBanner from './components/MigrationBanner';
 import OnboardingFlow from './components/OnboardingFlow';
 import AppTour from './components/AppTour';
 import PendingDeletionScreen from './components/PendingDeletionScreen';
+import WhatsNewModal, { TYPE_ICON } from './components/WhatsNewModal';
 import usePantry from './hooks/usePantry';
 import useToast from './hooks/useToast';
 import useSavedRecipes from './hooks/useSavedRecipes';
@@ -113,6 +114,8 @@ function AppContent() {
   const [showTour, setShowTour] = useState(false);
   const [showPendingDeletion, setShowPendingDeletion] = useState(false);
   const [scheduledFor, setScheduledFor] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [showWhatsNewFromUpdate, setShowWhatsNewFromUpdate] = useState(false);
   const toast = useToast();
   const grocery = useGroceryList(uid);
   const pantry = usePantry(uid, {
@@ -196,6 +199,30 @@ function AppContent() {
     return () => clearTimeout(timer);
   }, [currentUser]);
 
+  // "What's new" update banner — static versions.json only, no Firestore.
+  // Never shown mid-onboarding/tour, and never shown to a first-time user
+  // (reuses the same 'pantrypal_onboarding_done' flag OnboardingFlow.jsx
+  // already sets, rather than a fresh Firestore read).
+  useEffect(() => {
+    if (!currentUser) return;
+    if (showOnboarding || showTour) {
+      setUpdateInfo(null);
+      return;
+    }
+    fetch('/versions.json')
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(list => {
+        if (!Array.isArray(list) || list.length === 0) return;
+        const latest = list[0];
+        const lastSeen = localStorage.getItem('pantrypal_last_seen_version');
+        const onboardingDone = localStorage.getItem('pantrypal_onboarding_done') === 'true';
+        const isVersionBump = lastSeen && lastSeen !== latest.version;
+        const isReturningUserNeverTracked = !lastSeen && onboardingDone;
+        if (isVersionBump || isReturningUserNeverTracked) setUpdateInfo(latest);
+      })
+      .catch(() => {});
+  }, [currentUser, showOnboarding, showTour]);
+
   if (loading) {
     return (
       <div style={{
@@ -233,6 +260,30 @@ function AppContent() {
       <BugReportButton uid={uid} currentTab={tab} toast={toast} pantry={pantry} saved={saved} />
       <Toast toast={toast.toast} />
       <BottomNav active={tab} onChange={(t) => { setTab(t); trackEvent('page_view', { tab: t }, uid); }} />
+      {updateInfo && !showSettings && !showOnboarding && !showTour && (
+        <div onClick={() => setShowWhatsNewFromUpdate(true)} style={{
+          position: 'fixed', bottom: 72, left: 12, right: 12, maxWidth: 456, margin: '0 auto',
+          background: '#111827', color: '#fff', borderRadius: 12, padding: '10px 12px',
+          display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+          zIndex: 150, cursor: 'pointer',
+        }}>
+          <div style={{ fontSize: 18 }}>{TYPE_ICON[updateInfo.type] || '🔧'}</div>
+          <div style={{ flex: 1, fontSize: 13, lineHeight: 1.4 }}>
+            <strong>{updateInfo.title}</strong> — See what's new
+          </div>
+          <button onClick={(e) => {
+            e.stopPropagation();
+            localStorage.setItem('pantrypal_last_seen_version', updateInfo.version);
+            setUpdateInfo(null);
+          }} style={{
+            background: 'none', border: 'none', color: '#9ca3af', fontSize: 18,
+            cursor: 'pointer', padding: 4, lineHeight: 1, fontFamily: 'inherit',
+          }}>×</button>
+        </div>
+      )}
+      {showWhatsNewFromUpdate && (
+        <WhatsNewModal onClose={() => { setShowWhatsNewFromUpdate(false); setUpdateInfo(null); }} />
+      )}
       {showSettings && (
         <SettingsPage
           onClose={() => setShowSettings(false)}

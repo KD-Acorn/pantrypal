@@ -22,6 +22,9 @@ function swVersionPlugin() {
 
 export default defineConfig({
   plugins: [react(), swVersionPlugin()],
+  define: {
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(version),
+  },
   preview: {
     port: 3004,
     allowedHosts: [

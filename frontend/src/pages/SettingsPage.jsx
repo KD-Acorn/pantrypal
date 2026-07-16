@@ -5,9 +5,11 @@ import { db } from '../firebase';
 import SHOPPING_PARTNERS from '../config/shoppingPartners';
 import CreateHouseholdSheet from '../components/CreateHouseholdSheet';
 import JoinHouseholdSheet from '../components/JoinHouseholdSheet';
+import WhatsNewModal from '../components/WhatsNewModal';
 import LegalPage from './LegalPage';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || '0.0.0';
 
 const DIETARY_OPTIONS = [
   { key: 'vegetarian', label: '🌱 Vegetarian' },
@@ -24,6 +26,7 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
   const { currentUser, signOut } = useAuth();
   const [nameInput, setNameInput] = useState(settings.displayName || currentUser?.displayName || '');
   const [nameSaving, setNameSaving] = useState(false);
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
   const [partnersExpanded, setPartnersExpanded] = useState(false);
   const [showCreateHH, setShowCreateHH] = useState(false);
   const [showJoinHH, setShowJoinHH] = useState(false);
@@ -517,7 +520,7 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
           {/* About */}
           {sectionTitle('About')}
           <div style={{ padding: '10px 12px', background: '#f9fafb', borderRadius: 10 }}>
-            <div style={{ fontSize: 13, color: '#374151', marginBottom: 4 }}>My Pantry Club <span style={{ color: '#9ca3af' }}>v1.0.0</span></div>
+            <div style={{ fontSize: 13, color: '#374151', marginBottom: 4 }}>My Pantry Club <span style={{ color: '#9ca3af' }}>v{APP_VERSION}</span></div>
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>© 2026 My Pantry Club — DoneIt Technologies</div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
@@ -541,6 +544,11 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
                   cursor: 'pointer', fontFamily: 'inherit',
                 }}>⚙️ Redo Setup</button>
               )}
+              <button onClick={() => setShowWhatsNew(true)} style={{
+                width: '100%', height: 36, borderRadius: 8, border: '1px solid #e5e7eb',
+                background: '#fff', color: '#374151', fontSize: 13, fontWeight: 500,
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}>🆕 What's New</button>
             </div>
 
             <div style={{ fontSize: 11, color: '#9ca3af', lineHeight: 1.6, marginBottom: 12 }}>
@@ -554,6 +562,7 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
         </div>
       </div>
       {legalMode && <LegalPage mode={legalMode} onClose={() => setLegalMode(null)} />}
+      {showWhatsNew && <WhatsNewModal onClose={() => setShowWhatsNew(false)} />}
     </div>
   );
 }
