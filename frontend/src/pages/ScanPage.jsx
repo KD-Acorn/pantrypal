@@ -54,6 +54,48 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     });
   }
 
+  const COMPRESS_MAX_DIMENSION = 1600;
+  const COMPRESS_JPEG_QUALITY = 0.8;
+
+  // Raw camera photos are commonly 3-10MB+; base64 adds ~33% on top of that,
+  // which can exceed the backend's JSON body limit. Downscale + re-encode as
+  // JPEG via canvas before upload. Canvas can't decode HEIC/HEIF in most
+  // browsers, so that format falls back to the raw fileToBase64 path (same
+  // as before this fix) rather than failing to compress.
+  function compressImageToBase64(file) {
+    const isHeic = file.type === 'image/heic' || file.type === 'image/heif'
+      || file.name?.toLowerCase().endsWith('.heic') || file.name?.toLowerCase().endsWith('.heif');
+    if (isHeic) return fileToBase64(file).then(base64 => ({ base64, mimeType: file.type }));
+
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        let { width, height } = img;
+        if (width > COMPRESS_MAX_DIMENSION || height > COMPRESS_MAX_DIMENSION) {
+          if (width > height) {
+            height = Math.round(height * (COMPRESS_MAX_DIMENSION / width));
+            width = COMPRESS_MAX_DIMENSION;
+          } else {
+            width = Math.round(width * (COMPRESS_MAX_DIMENSION / height));
+            height = COMPRESS_MAX_DIMENSION;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', COMPRESS_JPEG_QUALITY);
+        const base64 = dataUrl.split(',')[1];
+        resolve({ base64, mimeType: 'image/jpeg' });
+      };
+      img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('Failed to load image for compression')); };
+      img.src = objectUrl;
+    });
+  }
+
   async function handleImageUpload(file) {
     if (!file) return;
     setScanning(true);
@@ -61,13 +103,17 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     setStoreBanner(null);
     setScanError(null);
     try {
-      const base64 = await fileToBase64(file);
+      const { base64, mimeType } = await compressImageToBase64(file);
       const resp = await fetch(`${API}/api/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64, mimeType: file.type }),
+        body: JSON.stringify({ imageBase64: base64, mimeType }),
       });
-      if (!resp.ok) throw new Error('Scan failed');
+      if (!resp.ok) {
+        const err = new Error(`Scan failed with status ${resp.status}`);
+        err.status = resp.status;
+        throw err;
+      }
       const data = await resp.json();
       const items = (data.ingredients || []).filter(Boolean);
       const detectedBarcodes = data.detectedBarcodes || [];
@@ -104,8 +150,13 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
       setDupeActions({});
       if (rateLimit) rateLimit.increment('scan_camera');
       trackEvent('scan_complete', { type: 'camera', items: foodItems.length, barcodes: detectedBarcodes.length });
-    } catch {
-      toast.show('Scan failed — try adding ingredients manually', 'error');
+    } catch (err) {
+      console.error('Scan error:', err);
+      trackEvent('scan_failed', { errorMessage: err?.message, status: err?.status });
+      const message = err?.status === 413
+        ? "That photo's a bit too large — try again, we've made this more reliable"
+        : 'Scan failed — try adding ingredients manually';
+      toast.show(message, 'error');
     } finally {
       setScanning(false);
       setScanMsg('');

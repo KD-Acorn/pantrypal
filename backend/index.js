@@ -29,7 +29,7 @@ try {
 }
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '15mb' }));
 app.use(cors({
   origin: [
     'http://localhost:3004',
@@ -1908,7 +1908,46 @@ app.post('/api/drinks/seed-cocktails', verifyAdmin, async (req, res) => {
   })().catch(err => console.error('[DrinkSeed] Fatal:', err.message));
 });
 
-let seedState = { running: false, stop: false, logs: [], saved: 0, total: 0, pointsUsed: 0 };
+let seedState = { running: false, stop: false, logs: [], saved: 0, skipped: 0, total: 0, pointsUsed: 0 };
+
+// Fallback query pool for /api/admin/seed-catalog when no custom `ingredients`
+// are supplied in the request body. This is deliberately larger than a single
+// run's batch size (see ADMIN_SEED_BATCH_SIZE) and is rotated via a persisted
+// offset in Firestore (config/admin_catalog_seed), the same pattern
+// scripts/weeklySync.js uses for its own rotation — otherwise every click of
+// "Run Catalog Seed" re-queries the exact same terms, which return 100%
+// already-cached candidates once the catalog has been seeded once, burning
+// Spoonacular points for zero new saves.
+// NOTE: the more specific multi-ingredient combos are listed first and the
+// old broad single-word terms ('chicken breast', 'eggs', etc.) last on
+// purpose — those broad terms are the ones that were being re-queried on
+// every click before this fix, so recipe_catalog is already saturated with
+// their top-ranked results. Putting them last means a fresh rotation
+// (offset 0) hits less-saturated queries first instead of immediately
+// reproducing the same 100%-duplicate outcome this fix addresses.
+const ADMIN_SEED_QUERY_POOL = [
+  'chicken garlic lemon', 'beef onion potato', 'pasta tomato basil',
+  'rice shrimp soy sauce', 'eggs cheese spinach', 'salmon dill',
+  'tofu ginger sesame', 'pork apple', 'turkey cranberry',
+  'bacon mushroom', 'tuna avocado', 'lamb rosemary',
+  'chicken coconut milk curry', 'beef broccoli', 'pasta cream mushroom',
+  'rice beans cilantro', 'eggs bacon cheese', 'salmon asparagus',
+  'shrimp coconut', 'pork cabbage', 'chicken thigh honey',
+  'ground turkey taco', 'fish lemon butter', 'chicken marsala',
+  'beef stroganoff', 'pasta pesto', 'rice pilaf', 'omelette vegetable',
+  'steak pepper', 'chicken tikka', 'teriyaki salmon', 'meatball marinara',
+  'cauliflower cheese', 'zucchini noodle', 'sweet potato black bean',
+  'lentil soup', 'chickpea curry', 'pulled pork', 'fish taco',
+  'chicken alfredo', 'shrimp scampi', 'beef chili', 'mushroom risotto',
+  'eggplant parmesan', 'coconut shrimp', 'chicken quesadilla',
+  'greek salad chicken', 'peanut butter banana', 'avocado toast egg',
+  'butter chicken', 'pad thai', 'falafel',
+  'chicken breast', 'ground beef', 'eggs', 'salmon', 'shrimp', 'tofu', 'pork',
+  'pasta', 'rice', 'garlic', 'onion', 'tomato', 'potato', 'broccoli',
+  'cheese', 'butter', 'chicken garlic', 'beef onion', 'pasta tomato',
+  'rice chicken', 'salmon lemon', 'shrimp garlic butter',
+];
+const ADMIN_SEED_BATCH_SIZE = 15;
 
 app.post('/api/admin/seed-catalog', verifyAdmin, async (req, res) => {
   if (seedState.running) return res.json({ error: 'Seed already running' });
@@ -1916,14 +1955,27 @@ app.post('/api/admin/seed-catalog', verifyAdmin, async (req, res) => {
   const apiKey = process.env.SPOONACULAR_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'SPOONACULAR_API_KEY not set' });
 
-  const ingredients = req.body.ingredients?.length ? req.body.ingredients : [
-    'chicken breast', 'ground beef', 'eggs', 'salmon', 'shrimp', 'tofu', 'pork',
-    'pasta', 'rice', 'garlic', 'onion', 'tomato', 'potato', 'broccoli',
-    'cheese', 'butter', 'chicken garlic', 'beef onion', 'pasta tomato',
-    'rice chicken', 'salmon lemon', 'shrimp garlic butter',
-  ];
+  const usingCustomIngredients = Boolean(req.body.ingredients?.length);
+  let ingredients;
+  let rotationOffset = 0;
+  const seedConfigRef = adminDb.collection('config').doc('admin_catalog_seed');
 
-  seedState = { running: true, stop: false, logs: [], saved: 0, total: ingredients.length, pointsUsed: 0 };
+  if (usingCustomIngredients) {
+    ingredients = req.body.ingredients;
+  } else {
+    const configSnap = await seedConfigRef.get();
+    const lastOffset = configSnap.exists ? (configSnap.data().lastOffset || 0) : 0;
+    rotationOffset = lastOffset % ADMIN_SEED_QUERY_POOL.length;
+    ingredients = [];
+    for (let i = 0; i < ADMIN_SEED_BATCH_SIZE; i++) {
+      ingredients.push(ADMIN_SEED_QUERY_POOL[(rotationOffset + i) % ADMIN_SEED_QUERY_POOL.length]);
+    }
+  }
+
+  seedState = { running: true, stop: false, logs: [], saved: 0, skipped: 0, total: ingredients.length, pointsUsed: 0 };
+  seedState.logs.push(usingCustomIngredients
+    ? `Using ${ingredients.length} custom ingredient(s) from request body.`
+    : `Using rotation offset ${rotationOffset} (pool size ${ADMIN_SEED_QUERY_POOL.length}): ${ingredients.join(', ')}`);
   res.json({ started: true, total: ingredients.length });
 
   (async () => {
@@ -1942,18 +1994,20 @@ app.post('/api/admin/seed-catalog', verifyAdmin, async (req, res) => {
         if (!searchResp.ok) { seedState.logs.push(`Search error ${searchResp.status}`); continue; }
         const candidates = await searchResp.json();
         seedState.pointsUsed++;
+        seedState.logs.push(`  "${query}": ${Array.isArray(candidates) ? candidates.length : 0} candidates from Spoonacular`);
 
+        let queryExisting = 0, querySaved = 0;
         for (const c of candidates) {
           if (seedState.stop || seedState.pointsUsed >= 45) break;
           const docId = String(c.id);
           const existing = await adminDb.collection('recipe_catalog').doc(docId).get();
-          if (existing.exists) continue;
+          if (existing.exists) { queryExisting++; seedState.skipped++; continue; }
 
           await new Promise(r => setTimeout(r, 500));
           const detailUrl = `https://api.spoonacular.com/recipes/${c.id}/information?apiKey=${apiKey}&includeNutrition=true`;
           const detailResp = await fetch(detailUrl);
           if (detailResp.status === 402) { seedState.logs.push('Spoonacular daily quota exhausted.'); break; }
-          if (!detailResp.ok) continue;
+          if (!detailResp.ok) { seedState.logs.push(`  detail fetch failed for id ${docId}: HTTP ${detailResp.status}`); continue; }
           const recipe = await detailResp.json();
           seedState.pointsUsed++;
 
@@ -1969,37 +2023,54 @@ app.post('/api/admin/seed-catalog', verifyAdmin, async (req, res) => {
           const findNutrient = (name) => nutrients.find(n => n.name === name)?.amount || 0;
           const servings = recipe.servings || 4;
 
-          await adminDb.collection('recipe_catalog').doc(docId).set({
-            id: docId, source: 'spoonacular', spoonacularId: recipe.id, mealDbId: null,
-            title: recipe.title,
-            description: desc + (desc.length >= 200 ? '...' : ''),
-            cookTime: `${mins} min`,
-            difficulty: mins <= 20 ? 'Easy' : mins <= 45 ? 'Medium' : 'Hard',
-            cuisine: recipe.cuisines?.[0] || recipe.dishTypes?.[0] || 'International',
-            baseServings: servings, ingredients: recipeIngredients,
-            indexedIngredients: recipeIngredients.map(i => i.name).filter(Boolean),
-            steps, thumbnail: (recipe.image || '').replace('312x231', '556x370') || null,
-            tags: [...(recipe.cuisines || []), ...(recipe.dishTypes || [])],
-            fetchedAt: FieldValue.serverTimestamp(), useCount: 0,
-            nutrition: {
-              calories: Math.round(findNutrient('Calories') / servings),
-              protein: Math.round(findNutrient('Protein') / servings),
-              carbs: Math.round(findNutrient('Carbohydrates') / servings),
-              fat: Math.round(findNutrient('Fat') / servings),
-              fiber: Math.round(findNutrient('Fiber') / servings),
-            },
-            sourceUrl: recipe.sourceUrl || null, avgRating: 0, ratingCount: 0, sourceData: {},
-          });
+          try {
+            await adminDb.collection('recipe_catalog').doc(docId).set({
+              id: docId, source: 'spoonacular', spoonacularId: recipe.id, mealDbId: null,
+              title: recipe.title,
+              description: desc + (desc.length >= 200 ? '...' : ''),
+              cookTime: `${mins} min`,
+              difficulty: mins <= 20 ? 'Easy' : mins <= 45 ? 'Medium' : 'Hard',
+              cuisine: recipe.cuisines?.[0] || recipe.dishTypes?.[0] || 'International',
+              baseServings: servings, ingredients: recipeIngredients,
+              indexedIngredients: recipeIngredients.map(i => i.name).filter(Boolean),
+              steps, thumbnail: (recipe.image || '').replace('312x231', '556x370') || null,
+              tags: [...(recipe.cuisines || []), ...(recipe.dishTypes || [])],
+              fetchedAt: FieldValue.serverTimestamp(), useCount: 0,
+              nutrition: {
+                calories: Math.round(findNutrient('Calories') / servings),
+                protein: Math.round(findNutrient('Protein') / servings),
+                carbs: Math.round(findNutrient('Carbohydrates') / servings),
+                fat: Math.round(findNutrient('Fat') / servings),
+                fiber: Math.round(findNutrient('Fiber') / servings),
+              },
+              sourceUrl: recipe.sourceUrl || null, avgRating: 0, ratingCount: 0, sourceData: {},
+            });
 
-          seedState.saved++;
-          seedState.logs.push(`Saved: ${recipe.title}`);
+            seedState.saved++;
+            querySaved++;
+            seedState.logs.push(`Saved: ${recipe.title}`);
+          } catch (writeErr) {
+            seedState.logs.push(`  Firestore write FAILED for "${recipe.title}" (${docId}): ${writeErr.message}`);
+          }
         }
+        seedState.logs.push(`  "${query}" done: ${queryExisting} already in catalog, ${querySaved} newly saved`);
       } catch (err) {
         seedState.logs.push(`Error: ${err.message}`);
       }
     }
+    if (!usingCustomIngredients) {
+      try {
+        await seedConfigRef.set({
+          lastOffset: rotationOffset + ingredients.length,
+          lastRunAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+      } catch (err) {
+        seedState.logs.push(`Failed to persist rotation offset: ${err.message}`);
+      }
+    }
+
     seedState.running = false;
-    seedState.logs.push(`Done. ${seedState.saved} recipes saved, ${seedState.pointsUsed} pts used.`);
+    seedState.logs.push(`Done. ${seedState.saved} recipes saved, ${seedState.skipped} skipped as duplicates, ${seedState.pointsUsed} pts used.`);
   })();
 });
 
@@ -2792,6 +2863,19 @@ app.get('/api/admin/support/sessions', verifyAdmin, async (req, res) => {
     const sessions = snap.docs.map(d => ({ id: d.id, ...d.data(), startedAt: d.data().startedAt?.toDate?.()?.toISOString() || null, lastMessageAt: d.data().lastMessageAt?.toDate?.()?.toISOString() || null }));
     res.json({ sessions });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// express.json()'s size-limit rejection (err.type === 'entity.too.large')
+// previously produced no application-level log at all — it never reaches
+// any route's own try/catch, so a request over the limit was completely
+// silent server-side. This makes it visible without changing the response
+// shape callers already handle via `if (!resp.ok)`.
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large') {
+    console.error(`[BodyLimit] ${req.method} ${req.path} exceeded limit (limit=${err.limit}, received=${err.length ?? 'unknown'})`);
+    return res.status(413).json({ error: 'Payload too large' });
+  }
+  next(err);
 });
 
 const PORT = process.env.PORT || 3003;
