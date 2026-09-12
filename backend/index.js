@@ -202,10 +202,10 @@ function pickSearchIngredients(pantryNames) {
   const isSkip = (name) => SKIP_KEYWORDS.some(k => name.includes(k));
 
   const base = pantryNames.filter(n => isBase(n) && !isSkip(n));
-  if (base.length >= 3) return base.slice(0, 3);
+  if (base.length >= 3) return base.slice(0, 8);
 
   const neutral = pantryNames.filter(n => !isSkip(n) && !base.includes(n));
-  return [...base, ...neutral].slice(0, 3);
+  return [...base, ...neutral].slice(0, 8);
 }
 
 function parseMealDBIngredients(meal) {
@@ -483,7 +483,9 @@ async function searchSpoonacular(filteredIngredients, pantryNames, needed) {
     const worthy = candidates.filter(c => {
       const used = c.usedIngredientCount || 0;
       const missed = c.missedIngredientCount || 0;
-      return (used + missed) > 0 && (used / (used + missed)) * 100 >= 30;
+      const score = (used + missed) > 0 ? (used / (used + missed)) * 100 : 0;
+      console.log(`[Spoonacular quick-score] ${c.title}: used=${used} missed=${missed} score=${score.toFixed(1)}`);
+      return (used + missed) > 0 && score >= 30;
     });
     if (worthy.length === 0) { console.log('[Spoonacular] No candidates passed quick score'); return []; }
 
