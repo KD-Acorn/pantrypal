@@ -158,8 +158,7 @@ function TermsContent() {
       <p>Our total liability is limited to the amount you paid us in the 12 months preceding any claim.</p>
 
       <SectionTitle>9. Termination</SectionTitle>
-      <p>We may suspend or terminate accounts that violate these terms. You may delete your account at any time from Settings.</p>
-
+      <p>We may suspend or terminate accounts that violate these terms. You may delete your account at any time from Settings. See <a href="https://mypantryclub.com/delete-account.html" target="_blank" rel="noopener noreferrer" style={{ color: '#10b981' }}>how account deletion works</a> for details on the process and what data is removed.</p>
       <SectionTitle>10. Changes to Terms</SectionTitle>
       <p>We may update these terms. Continued use after changes constitutes acceptance. We will notify users of material changes.</p>
 
