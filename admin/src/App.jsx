@@ -8,8 +8,8 @@ import BugReportsPage from './pages/BugReportsPage';
 import RecipesPage from './pages/RecipesPage';
 import CatalogPage from './pages/CatalogPage';
 import AnalyticsPage from './pages/AnalyticsPage';
-import PlaceholderPage from './pages/PlaceholderPage';
 import SupportPage from './pages/SupportPage';
+import SettingsPage from './pages/SettingsPage';
 
 function Spinner() {
   return (
@@ -38,7 +38,7 @@ function AdminPanel() {
       case 'bugs': return <BugReportsPage />;
       case 'analytics': return <AnalyticsPage />;
       case 'support': return <SupportPage />;
-      case 'settings': return <PlaceholderPage title="Settings" icon="⚙️" description="Admin panel configuration" />;
+      case 'settings': return <SettingsPage />;
       default: return <DashboardPage />;
     }
   })();

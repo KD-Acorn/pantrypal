@@ -1599,11 +1599,23 @@ async function sendPushToDoc(docSnap, payload) {
 
 // ── POST /api/push/test-send — admin-only manual trigger, for verifying the
 // opt-in → subscribe → real device notification loop before trusting the cron.
+// Body: { targetEmail?: string, title?, body?, url? }. Defaults to the calling
+// admin's own uid when targetEmail is omitted ("send test to myself").
 app.post('/api/push/test-send', verifyAdmin, async (req, res) => {
   if (!adminDb) return res.status(503).json({ error: 'Database unavailable' });
   if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return res.status(503).json({ error: 'VAPID keys not configured' });
 
-  const targetUid = req.body?.uid || req.adminUid;
+  const targetEmail = req.body?.targetEmail?.trim();
+  let targetUid = req.adminUid;
+  if (targetEmail) {
+    try {
+      const userRecord = await adminAuth.getUserByEmail(targetEmail);
+      targetUid = userRecord.uid;
+    } catch {
+      return res.status(404).json({ error: `No user found with email ${targetEmail}` });
+    }
+  }
+
   const payload = {
     title: req.body?.title || 'My Pantry Club (test)',
     body: req.body?.body || 'This is a test push from /api/push/test-send.',
@@ -1612,7 +1624,9 @@ app.post('/api/push/test-send', verifyAdmin, async (req, res) => {
 
   try {
     const docSnap = await adminDb.collection('push_subscriptions').doc(targetUid).get();
-    if (!docSnap.exists) return res.status(404).json({ error: `No subscription found for uid ${targetUid}` });
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: 'No subscription found — have they enabled the reminder toggle in Settings?' });
+    }
     const result = await sendPushToDoc(docSnap, payload);
     res.json({ result, uid: targetUid });
   } catch (err) {
