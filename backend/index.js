@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url';
 import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import webpush from 'web-push';
+import cron from 'node-cron';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
 import { getUsage, recordUsage, wouldExceedSafetyCap, getTagOffset, setTagOffset, MONTHLY_LIMIT, SAFETY_CAP } from './scripts/tastyQuota.js';
 
@@ -26,6 +28,16 @@ try {
   adminAuth = getAdminAuth();
 } catch (err) {
   console.warn('[Admin] Service account not found — Firebase Admin features (account deletion) will be unavailable:', err.message);
+}
+
+// ── Web Push (VAPID) ─────────────────────────────────────────────────────────
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:privacy@mypantryclub.com';
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  console.warn('[Push] VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set — push notifications unavailable');
 }
 
 const app = express();
@@ -1514,6 +1526,131 @@ app.post('/api/delete-account/now', async (req, res) => {
     res.status(500).json({ error: 'Account deletion failed' });
   }
 });
+
+// ── Push notifications ───────────────────────────────────────────────────────
+// One subscription doc per user (uid == doc id). Re-subscribing (new device,
+// or a browser-rotated endpoint) overwrites the previous doc — closed-testing
+// scale doesn't need a subcollection of multiple devices per user yet.
+
+// ── POST /api/push/subscribe — save a PushSubscription for the current user ──
+app.post('/api/push/subscribe', async (req, res) => {
+  if (!adminAuth || !adminDb) return res.status(503).json({ error: 'Push notifications temporarily unavailable' });
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
+
+  const { subscription } = req.body;
+  if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+    return res.status(400).json({ error: 'Valid subscription object is required' });
+  }
+
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+    const uid = decoded.uid;
+    await adminDb.collection('push_subscriptions').doc(uid).set({
+      uid,
+      endpoint: subscription.endpoint,
+      keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
+      userAgent: req.headers['user-agent'] || null,
+      subscribedAt: FieldValue.serverTimestamp(),
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Push subscribe error:', err);
+    res.status(500).json({ error: 'Failed to save subscription' });
+  }
+});
+
+// ── POST /api/push/unsubscribe — remove the current user's subscription ─────
+app.post('/api/push/unsubscribe', async (req, res) => {
+  if (!adminAuth || !adminDb) return res.status(503).json({ error: 'Push notifications temporarily unavailable' });
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
+
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+    await adminDb.collection('push_subscriptions').doc(decoded.uid).delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Push unsubscribe error:', err);
+    res.status(500).json({ error: 'Failed to remove subscription' });
+  }
+});
+
+// Sends one push payload to one subscription doc; deletes the doc on a
+// 404/410 (the push service telling us the endpoint is dead — uninstalled,
+// permission revoked, or browser storage cleared). Returns 'sent' | 'pruned' | 'error'.
+async function sendPushToDoc(docSnap, payload) {
+  const sub = docSnap.data();
+  try {
+    await webpush.sendNotification(
+      { endpoint: sub.endpoint, keys: sub.keys },
+      JSON.stringify(payload)
+    );
+    return 'sent';
+  } catch (err) {
+    if (err.statusCode === 404 || err.statusCode === 410) {
+      await docSnap.ref.delete();
+      return 'pruned';
+    }
+    console.error(`[Push] Send failed for ${docSnap.id}:`, err.statusCode || err.message);
+    return 'error';
+  }
+}
+
+// ── POST /api/push/test-send — admin-only manual trigger, for verifying the
+// opt-in → subscribe → real device notification loop before trusting the cron.
+app.post('/api/push/test-send', verifyAdmin, async (req, res) => {
+  if (!adminDb) return res.status(503).json({ error: 'Database unavailable' });
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return res.status(503).json({ error: 'VAPID keys not configured' });
+
+  const targetUid = req.body?.uid || req.adminUid;
+  const payload = {
+    title: req.body?.title || 'My Pantry Club (test)',
+    body: req.body?.body || 'This is a test push from /api/push/test-send.',
+    url: req.body?.url || '/',
+  };
+
+  try {
+    const docSnap = await adminDb.collection('push_subscriptions').doc(targetUid).get();
+    if (!docSnap.exists) return res.status(404).json({ error: `No subscription found for uid ${targetUid}` });
+    const result = await sendPushToDoc(docSnap, payload);
+    res.json({ result, uid: targetUid });
+  } catch (err) {
+    console.error('Push test-send error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Daily reminder cron ──────────────────────────────────────────────────────
+// Runs in-process inside the existing pantrypal-api PM2 process — no separate
+// process/service. 15:00 UTC daily = 11am ET / 10am CT / 9am MT / 8am PT
+// (US DST, as of this writing) — a late-morning nudge, not a pre-dawn one, for
+// the closed-testing group's likely timezones. Explicit `timezone: 'UTC'` so
+// the schedule doesn't silently shift if the host's system timezone changes.
+if (adminDb && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  cron.schedule('0 15 * * *', async () => {
+    console.log('[Push] Daily reminder job starting');
+    let sent = 0, pruned = 0, errors = 0;
+    try {
+      const snap = await adminDb.collection('push_subscriptions').get();
+      const payload = {
+        title: 'My Pantry Club',
+        body: "Check what's in your pantry — see what you can cook today!",
+        url: '/',
+      };
+      for (const docSnap of snap.docs) {
+        const result = await sendPushToDoc(docSnap, payload);
+        if (result === 'sent') sent++;
+        else if (result === 'pruned') pruned++;
+        else errors++;
+      }
+    } catch (err) {
+      console.error('[Push] Daily reminder job failed:', err.message);
+    }
+    console.log(`[Push] Daily reminder done — sent:${sent}, pruned:${pruned}, errors:${errors}`);
+  }, { timezone: 'UTC' });
+  console.log('[Push] Daily reminder cron scheduled — 15:00 UTC (11am ET / 8am PT)');
+}
 
 // ── Drinks helpers ────────────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { doc, deleteDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -10,6 +10,16 @@ import LegalPage from './LegalPage';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const APP_VERSION = import.meta.env.VITE_APP_VERSION || '0.0.0';
+const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || '';
+
+// PushManager needs the VAPID key as a Uint8Array, not the base64url string
+// Firestore/env vars store it as.
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
 
 const DIETARY_OPTIONS = [
   { key: 'vegetarian', label: '🌱 Vegetarian' },
@@ -38,6 +48,10 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteResult, setDeleteResult] = useState(null);
   const [legalMode, setLegalMode] = useState(null);
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushError, setPushError] = useState('');
 
   const name = currentUser?.displayName || currentUser?.email || 'User';
   const initial = (settings.displayName || name).charAt(0).toUpperCase();
@@ -48,6 +62,69 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
     settings.updateDisplayName(nameInput.trim());
     setTimeout(() => setNameSaving(false), 500);
   }
+
+  // Reflects actual browser subscription state (not a local preference flag) —
+  // covers the user having revoked the permission or cleared site data outside the app.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !VAPID_PUBLIC_KEY) return;
+    setPushSupported(true);
+    navigator.serviceWorker.ready
+      .then(reg => reg.pushManager.getSubscription())
+      .then(sub => setPushSubscribed(!!sub))
+      .catch(() => {});
+  }, []);
+
+  const handlePushSubscribe = useCallback(async () => {
+    setPushError('');
+    setPushLoading(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setPushError(permission === 'denied'
+          ? 'Notifications are blocked for this site in your browser settings.'
+          : 'Permission was not granted.');
+        setPushLoading(false);
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      const subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+      const token = await currentUser.getIdToken();
+      const resp = await fetch(`${API}/api/push/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      });
+      if (!resp.ok) throw new Error('Server rejected subscription');
+      setPushSubscribed(true);
+    } catch (err) {
+      setPushError('Could not enable notifications. Please try again.');
+      console.error('[Push] Subscribe failed:', err);
+    }
+    setPushLoading(false);
+  }, [currentUser]);
+
+  const handlePushUnsubscribe = useCallback(async () => {
+    setPushError('');
+    setPushLoading(true);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const subscription = await reg.pushManager.getSubscription();
+      if (subscription) await subscription.unsubscribe();
+      const token = await currentUser.getIdToken();
+      await fetch(`${API}/api/push/unsubscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+      setPushSubscribed(false);
+    } catch (err) {
+      setPushError('Could not disable notifications. Please try again.');
+      console.error('[Push] Unsubscribe failed:', err);
+    }
+    setPushLoading(false);
+  }, [currentUser]);
 
   const toggle = (active, onToggle) => (
     <button onClick={onToggle} style={{
@@ -477,6 +554,27 @@ export default function SettingsPage({ onClose, settings, rateLimit, household, 
 
           {/* Notification Preferences */}
           {sectionTitle('Notification Preferences')}
+          {pushSupported && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '10px 12px', background: '#f9fafb', borderRadius: 10,
+              }}>
+                <div>
+                  <span style={{ fontSize: 14, color: '#374151' }}>Daily pantry reminder</span>
+                  <div style={{ fontSize: 11, color: '#9ca3af' }}>
+                    {pushSubscribed ? 'Enabled on this device' : 'A daily nudge to check your pantry'}
+                  </div>
+                </div>
+                {toggle(pushSubscribed, () => {
+                  if (pushLoading) return;
+                  pushSubscribed ? handlePushUnsubscribe() : handlePushSubscribe();
+                })}
+              </div>
+              {pushLoading && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6, paddingLeft: 12 }}>Updating…</div>}
+              {pushError && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 6, paddingLeft: 12 }}>{pushError}</div>}
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, opacity: 0.5 }}>
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
