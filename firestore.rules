@@ -24,6 +24,9 @@ service cloud.firestore {
     match /saved_recipes/{uid}/recipes/{recipeId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+    match /saved_drinks/{uid}/drinks/{drinkId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
     match /cook_history/{uid}/entries/{entryId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
