@@ -11,6 +11,10 @@ service cloud.firestore {
       allow read: if request.auth != null && request.auth.uid == docId;
       allow write: if false; // only the Admin SDK (server) writes this collection
     }
+    match /push_tokens/{docId} {
+      allow read: if request.auth != null && request.auth.uid == docId;
+      allow write: if false; // only the Admin SDK (server) writes this collection
+    }
     match /{document=**} {
       allow read: if isAdmin();
       allow write: if isAdmin();

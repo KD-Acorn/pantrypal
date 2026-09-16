@@ -1576,6 +1576,100 @@ app.post('/api/push/unsubscribe', async (req, res) => {
   }
 });
 
+// ── Native push (RN/Expo) ─────────────────────────────────────────────────────
+// Separate collection from push_subscriptions rather than a platform-discriminator
+// field on it: push_subscriptions' shape (endpoint + keys.p256dh/auth) is Web
+// Push-specific and sendPushToDoc() assumes it unconditionally. A sibling
+// collection with the same one-doc-per-uid shape keeps both send paths simple
+// and keeps this change from touching any existing Web Push code at all.
+// Doc id == uid, same reasoning as push_subscriptions (closed-testing scale).
+const EXPO_PUSH_TOKEN_RE = /^Expo(nent)?PushToken\[.+\]$/;
+
+// ── POST /api/push/register-device — save an Expo push token for the current user ─
+app.post('/api/push/register-device', async (req, res) => {
+  if (!adminAuth || !adminDb) return res.status(503).json({ error: 'Push notifications temporarily unavailable' });
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
+
+  const { expoPushToken } = req.body;
+  if (!expoPushToken || !EXPO_PUSH_TOKEN_RE.test(expoPushToken)) {
+    return res.status(400).json({ error: 'Valid expoPushToken is required' });
+  }
+
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+    const uid = decoded.uid;
+    await adminDb.collection('push_tokens').doc(uid).set({
+      uid,
+      expoPushToken,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Push register-device error:', err);
+    res.status(500).json({ error: 'Failed to save device token' });
+  }
+});
+
+// ── POST /api/push/unregister-device — remove the current user's Expo token ──
+app.post('/api/push/unregister-device', async (req, res) => {
+  if (!adminAuth || !adminDb) return res.status(503).json({ error: 'Push notifications temporarily unavailable' });
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
+
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+    await adminDb.collection('push_tokens').doc(decoded.uid).delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Push unregister-device error:', err);
+    res.status(500).json({ error: 'Failed to remove device token' });
+  }
+});
+
+// Sends one payload to a batch of push_tokens docs via Expo's push API in one
+// HTTPS call (Expo accepts up to 100 messages per request — closed-testing
+// scale is well under that, so no chunking yet). Deletes any doc whose token
+// comes back DeviceNotRegistered. Returns { sent, pruned, errors } counts,
+// mirroring sendPushToDoc's 'sent'/'pruned'/'error' vocabulary above.
+async function sendExpoPushBatch(docSnaps, payload) {
+  const counts = { sent: 0, pruned: 0, errors: 0 };
+  if (docSnaps.length === 0) return counts;
+
+  const messages = docSnaps.map(d => ({
+    to: d.data().expoPushToken,
+    title: payload.title,
+    body: payload.body,
+    data: { url: payload.url || '/' },
+  }));
+
+  try {
+    const resp = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(messages),
+    });
+    const result = await resp.json();
+    const tickets = result.data || [];
+
+    await Promise.all(tickets.map(async (ticket, i) => {
+      if (ticket.status === 'ok') {
+        counts.sent++;
+      } else if (ticket.details?.error === 'DeviceNotRegistered') {
+        await docSnaps[i].ref.delete();
+        counts.pruned++;
+      } else {
+        console.error(`[Push] Expo send failed for ${docSnaps[i].id}:`, ticket.message || ticket.details?.error);
+        counts.errors++;
+      }
+    }));
+  } catch (err) {
+    console.error('[Push] Expo batch send error:', err.message);
+    counts.errors += docSnaps.length;
+  }
+  return counts;
+}
+
 // Sends one push payload to one subscription doc; deletes the doc on a
 // 404/410 (the push service telling us the endpoint is dead — uninstalled,
 // permission revoked, or browser storage cleared). Returns 'sent' | 'pruned' | 'error'.
@@ -1641,29 +1735,44 @@ app.post('/api/push/test-send', verifyAdmin, async (req, res) => {
 // (US DST, as of this writing) — a late-morning nudge, not a pre-dawn one, for
 // the closed-testing group's likely timezones. Explicit `timezone: 'UTC'` so
 // the schedule doesn't silently shift if the host's system timezone changes.
-if (adminDb && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+// Sends to both push_subscriptions (Web Push) and push_tokens (Expo/RN) —
+// the outer guard only needs adminDb now, since Expo push doesn't need VAPID
+// keys; the web leg below has its own VAPID guard so one path's misconfig
+// doesn't take down the other.
+if (adminDb) {
   cron.schedule('0 15 * * *', async () => {
     console.log('[Push] Daily reminder job starting');
+    const payload = {
+      title: 'My Pantry Club',
+      body: "Check what's in your pantry — see what you can cook today!",
+      url: '/',
+    };
+
     let sent = 0, pruned = 0, errors = 0;
-    try {
-      const snap = await adminDb.collection('push_subscriptions').get();
-      const payload = {
-        title: 'My Pantry Club',
-        body: "Check what's in your pantry — see what you can cook today!",
-        url: '/',
-      };
-      for (const docSnap of snap.docs) {
-        const result = await sendPushToDoc(docSnap, payload);
-        if (result === 'sent') sent++;
-        else if (result === 'pruned') pruned++;
-        else errors++;
+    if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+      try {
+        const snap = await adminDb.collection('push_subscriptions').get();
+        for (const docSnap of snap.docs) {
+          const result = await sendPushToDoc(docSnap, payload);
+          if (result === 'sent') sent++;
+          else if (result === 'pruned') pruned++;
+          else errors++;
+        }
+      } catch (err) {
+        console.error('[Push] Daily reminder (web) job failed:', err.message);
       }
-    } catch (err) {
-      console.error('[Push] Daily reminder job failed:', err.message);
     }
-    console.log(`[Push] Daily reminder done — sent:${sent}, pruned:${pruned}, errors:${errors}`);
+    console.log(`[Push] Daily reminder (web) done — sent:${sent}, pruned:${pruned}, errors:${errors}`);
+
+    try {
+      const nativeSnap = await adminDb.collection('push_tokens').get();
+      const nativeCounts = await sendExpoPushBatch(nativeSnap.docs, payload);
+      console.log(`[Push] Daily reminder (native) done — sent:${nativeCounts.sent}, pruned:${nativeCounts.pruned}, errors:${nativeCounts.errors}`);
+    } catch (err) {
+      console.error('[Push] Daily reminder (native) job failed:', err.message);
+    }
   }, { timezone: 'UTC' });
-  console.log('[Push] Daily reminder cron scheduled — 15:00 UTC (11am ET / 8am PT)');
+  console.log('[Push] Daily reminder cron scheduled — 15:00 UTC (11am ET / 8am PT), web + native');
 }
 
 // ── Drinks helpers ────────────────────────────────────────────────────────────
