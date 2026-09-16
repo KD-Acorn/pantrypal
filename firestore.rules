@@ -1,12 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
     function isAdmin() {
-      return request.auth != null && 
+      return request.auth != null &&
              request.auth.uid == 'gTCwD1bHALeeNZ7wDNbt9sSEL8x1';
     }
-    
+
+    match /push_subscriptions/{docId} {
+      allow read: if request.auth != null && request.auth.uid == docId;
+      allow write: if false; // only the Admin SDK (server) writes this collection
+    }
     match /{document=**} {
       allow read: if isAdmin();
       allow write: if isAdmin();
@@ -27,8 +31,10 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
     match /public_recipes/{recipeId} {
-      allow read: if true;
-      allow write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null &&
+        request.auth.uid == resource.data.authorUid;
     }
     match /grocery/{uid}/items/{itemId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
@@ -69,12 +75,22 @@ service cloud.firestore {
       allow read, write: if request.auth != null &&
         request.auth.uid == docId;
     }
-    match /push_subscriptions/{docId} {
-      // Client can read its own subscription status; writes only ever happen
-      // server-side (POST /api/push/subscribe|unsubscribe) via the Admin SDK,
-      // which bypasses these rules entirely — client write is intentionally blocked.
-      allow read: if request.auth != null && request.auth.uid == docId;
-      allow write: if false;
+    match /verified_products/{barcode} {
+      allow read, write: if request.auth != null;
+    }
+    match /user_recipes/{recipeId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null &&
+        request.auth.uid == resource.data.authorUid;
+    }
+    match /recipe_comments/{recipeId}/comments/{commentId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null &&
+        request.auth.uid == resource.data.authorUid;
+      allow delete: if request.auth != null &&
+        request.auth.uid == resource.data.authorUid;
     }
   }
 }
