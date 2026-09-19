@@ -14,6 +14,7 @@ import cron from 'node-cron';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
+import { validateSupportMessages, sanitizeSupportContext, SUPPORT_SESSION_ID_RE } from './utils/supportContext.js';
 import { getUsage, recordUsage, wouldExceedSafetyCap, getTagOffset, setTagOffset, MONTHLY_LIMIT, SAFETY_CAP } from './scripts/tastyQuota.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -3043,12 +3044,35 @@ app.delete('/api/admin/beverage-catalog/drinks/:id', verifyAdmin, async (req, re
 
 // ── POST /api/support/chat — Claude-powered support assistant ─────────────────
 app.post('/api/support/chat', requireAuth, supportChatLimiter, async (req, res) => {
-  const { messages, context, sessionId, useSonnet } = req.body;
-  if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages required' });
+  // The model is chosen server-side; the client's `useSonnet` flag is deliberately ignored.
+  // (There is no server-side escalation rule, so this is Haiku only.)
+  const model = 'claude-haiku-4-5-20251001';
 
-  const model = useSonnet ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
-  const ctx = context || {};
-  const di = ctx.deviceInfo || {};
+  const { context, sessionId } = req.body;
+  const checked = validateSupportMessages(req.body.messages);
+  if (!checked.ok) return res.status(400).json({ error: checked.error });
+  const messages = checked.messages;
+  if (typeof sessionId !== 'string' || !SUPPORT_SESSION_ID_RE.test(sessionId)) {
+    return res.status(400).json({ error: 'a valid sessionId is required' });
+  }
+
+  // Bind the session to its creator before spending a model call on it. An existing
+  // session may only be continued by the uid that created it. Fail closed if the
+  // lookup itself errors.
+  let existingSession = null;
+  try {
+    const snap = await adminDb.collection('support_sessions').doc(sessionId).get();
+    if (snap.exists) {
+      existingSession = snap.data();
+      if (existingSession.uid !== req.uid) return res.status(403).json({ error: 'Forbidden' });
+    }
+  } catch (e) {
+    console.error('[Support] Session lookup failed:', e.message);
+    return res.status(503).json({ error: 'Support chat temporarily unavailable' });
+  }
+
+  const ctx = sanitizeSupportContext(context);
+  const di = ctx.deviceInfo;
   const recentErrorsText = (ctx.recentErrors || []).length > 0
     ? ctx.recentErrors.map(e => `  - ${e.message || e}`).join('\n')
     : 'None';
@@ -3152,13 +3176,13 @@ Use \\n for line breaks inside the message string.`;
           type: 'bug',
           description: meta.bugReportSummary || 'Issue reported via AI support chat',
           currentTab: ctx.currentTab || 'unknown', domain: ctx.domain || '',
-          userAgent: `${di.browser} on ${di.os}`, uid: ctx.uid || 'anonymous',
-          status: 'in_progress', source: 'support_chat', sessionId: sessionId || null,
+          userAgent: `${di.browser} on ${di.os}`, uid: req.uid,
+          status: 'in_progress', source: 'support_chat', sessionId,
           debugInfo: {
             browser: di.browser, os: di.os, deviceType: di.deviceType,
             currentTab: ctx.currentTab, pantryItemCount: ctx.pantryItemCount,
-            appVersion: ctx.appVersion, recentLogs: ctx.recentLogs || [],
-            recentErrors: ctx.recentErrors || [], capturedAt: new Date().toISOString(),
+            appVersion: ctx.appVersion, recentLogs: ctx.recentLogs,
+            recentErrors: ctx.recentErrors, capturedAt: new Date().toISOString(),
           },
           timestamp: FieldValue.serverTimestamp(),
         });
@@ -3167,33 +3191,31 @@ Use \\n for line breaks inside the message string.`;
     }
 
     // Update or create support session
-    if (adminDb && sessionId) {
-      try {
-        const sessionRef = adminDb.collection('support_sessions').doc(sessionId);
-        const now = new Date().toISOString();
-        const allMessages = [...messages, { role: 'assistant', content: parsed.message, timestamp: now }];
-        const status = meta.issueResolved ? 'resolved' : meta.fileBugReport ? 'in-progress' : meta.suggestManualReport ? 'manual-report' : 'active';
-        const sessionSnap = await sessionRef.get();
-        if (!sessionSnap.exists) {
-          await sessionRef.set({
-            sessionId, uid: ctx.uid || 'anonymous', displayName: ctx.displayName || '',
-            startedAt: FieldValue.serverTimestamp(), lastMessageAt: FieldValue.serverTimestamp(),
-            status, model: useSonnet ? 'sonnet' : 'haiku', messages: allMessages,
-            context: ctx, bugReportId, resolution: meta.issueResolved ? parsed.message : null,
-            escalated: meta.escalateToSonnet || false, deviceInfo: di,
-          });
-        } else {
-          const existing = sessionSnap.data();
-          await sessionRef.update({
-            lastMessageAt: FieldValue.serverTimestamp(), status,
-            model: useSonnet ? 'sonnet' : 'haiku', messages: allMessages,
-            bugReportId: bugReportId || existing.bugReportId || null,
-            resolution: meta.issueResolved ? parsed.message : (existing.resolution || null),
-            escalated: meta.escalateToSonnet || existing.escalated || false,
-          });
-        }
-      } catch (e) { console.error('[Support] Session update failed:', e.message); }
-    }
+    try {
+      const sessionRef = adminDb.collection('support_sessions').doc(sessionId);
+      const now = new Date().toISOString();
+      const allMessages = [...messages, { role: 'assistant', content: parsed.message, timestamp: now }];
+      const status = meta.issueResolved ? 'resolved' : meta.fileBugReport ? 'in-progress' : meta.suggestManualReport ? 'manual-report' : 'active';
+      if (!existingSession) {
+        // create() (not set()) so a concurrent first request from another uid can't be overwritten
+        await sessionRef.create({
+          sessionId, uid: req.uid, displayName: ctx.displayName || '',
+          startedAt: FieldValue.serverTimestamp(), lastMessageAt: FieldValue.serverTimestamp(),
+          status, model: 'haiku', messages: allMessages,
+          context: ctx, bugReportId, resolution: meta.issueResolved ? parsed.message : null,
+          escalated: meta.escalateToSonnet || false, deviceInfo: di,
+        });
+      } else {
+        const existing = existingSession;
+        await sessionRef.update({
+          lastMessageAt: FieldValue.serverTimestamp(), status,
+          model: 'haiku', messages: allMessages,
+          bugReportId: bugReportId || existing.bugReportId || null,
+          resolution: meta.issueResolved ? parsed.message : (existing.resolution || null),
+          escalated: meta.escalateToSonnet || existing.escalated || false,
+        });
+      }
+    } catch (e) { console.error('[Support] Session update failed:', e.message); }
 
     res.json({
       message: parsed.message,
