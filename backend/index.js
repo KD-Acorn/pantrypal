@@ -14,6 +14,7 @@ import cron from 'node-cron';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
+import { validatePushSubscription } from './utils/pushEndpoint.js';
 import { BARCODE_RE, validateConfirmPayload, buildConfirmationUpdate } from './utils/barcode.js';
 import { validateSupportMessages, sanitizeSupportContext, SUPPORT_SESSION_ID_RE } from './utils/supportContext.js';
 import { getUsage, recordUsage, wouldExceedSafetyCap, getTagOffset, setTagOffset, MONTHLY_LIMIT, SAFETY_CAP } from './scripts/tastyQuota.js';
@@ -1615,6 +1616,8 @@ app.post('/api/push/subscribe', async (req, res) => {
   if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
     return res.status(400).json({ error: 'Valid subscription object is required' });
   }
+  const validated = validatePushSubscription(subscription);
+  if (!validated.ok) return res.status(400).json({ error: validated.error });
 
   try {
     const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
@@ -1745,9 +1748,16 @@ async function sendExpoPushBatch(docSnaps, payload) {
 
 // Sends one push payload to one subscription doc; deletes the doc on a
 // 404/410 (the push service telling us the endpoint is dead — uninstalled,
-// permission revoked, or browser storage cleared). Returns 'sent' | 'pruned' | 'error'.
+// permission revoked, or browser storage cleared). Returns 'sent' | 'pruned' | 'error'
+// | 'skipped' — 'skipped' means the stored endpoint/keys failed the allowlist check
+// (SSRF guard, same rules as /api/push/subscribe) and nothing was sent or deleted.
 async function sendPushToDoc(docSnap, payload) {
   const sub = docSnap.data();
+  const validated = validatePushSubscription(sub);
+  if (!validated.ok) {
+    console.error(`[Push] Skipping subscription ${docSnap.id}: ${validated.error}`);
+    return 'skipped';
+  }
   try {
     await webpush.sendNotification(
       { endpoint: sub.endpoint, keys: sub.keys },
@@ -1821,7 +1831,7 @@ if (adminDb) {
       url: '/',
     };
 
-    let sent = 0, pruned = 0, errors = 0;
+    let sent = 0, pruned = 0, errors = 0, skipped = 0;
     if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
       try {
         const snap = await adminDb.collection('push_subscriptions').get();
@@ -1829,13 +1839,14 @@ if (adminDb) {
           const result = await sendPushToDoc(docSnap, payload);
           if (result === 'sent') sent++;
           else if (result === 'pruned') pruned++;
+          else if (result === 'skipped') skipped++;
           else errors++;
         }
       } catch (err) {
         console.error('[Push] Daily reminder (web) job failed:', err.message);
       }
     }
-    console.log(`[Push] Daily reminder (web) done — sent:${sent}, pruned:${pruned}, errors:${errors}`);
+    console.log(`[Push] Daily reminder (web) done — sent:${sent}, pruned:${pruned}, skipped:${skipped}, errors:${errors}`);
 
     try {
       const nativeSnap = await adminDb.collection('push_tokens').get();
