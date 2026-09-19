@@ -11,6 +11,8 @@ import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import webpush from 'web-push';
 import cron from 'node-cron';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
 import { getUsage, recordUsage, wouldExceedSafetyCap, getTagOffset, setTagOffset, MONTHLY_LIMIT, SAFETY_CAP } from './scripts/tastyQuota.js';
 
@@ -40,8 +42,74 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   console.warn('[Push] VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set — push notifications unavailable');
 }
 
+// ── Rate limits & body limits — all tunable here ─────────────────────────────
+// Per-uid limits key on req.uid, so they must run AFTER requireAuth. Counters are
+// in-memory: they reset on restart and are per-process (fine for a single PM2 instance).
+const LIMITS = {
+  ipPerMin: 120,                       // coarse pre-auth limiter, per IP, all /api routes
+  // One shared bucket for the three vision (GPT-4o) scan routes: /api/scan, /api/scan-receipt, /api/scan-barcode
+  scan: { perMin: 10, perDay: 150 },
+  recipes: { perMin: 20 },
+  drinks: { perMin: 20 },
+  mocktail: { perMin: 20 },
+  substitutions: { perMin: 20 },
+  supportChat: { perMin: 10 },
+  barcodeConfirm: { perMin: 30 },
+  barcodeLookup: { perMin: 30 },
+  storeAbbreviations: { perMin: 10 },
+  bodyDefault: '1mb',                  // every route except the scan routes
+  bodyScan: '10mb',                    // base64 images on the three scan routes only
+};
+
+const MINUTE_MS = 60_000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
+const TOO_MANY_REQUESTS = { error: 'Too many requests. Please wait a moment and try again.' };
+
+const uidLimiter = (windowMs, limit) => rateLimit({
+  windowMs,
+  limit,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => req.uid || ipKeyGenerator(req.ip),
+  message: TOO_MANY_REQUESTS,
+});
+
+// Coarse pre-auth limiter: per client IP, before any token verification.
+// NOTE: CF-Connecting-IP is only trustworthy once the API is bound to loopback
+// behind cloudflared (a later hardening step). Until then a direct caller can
+// spoof the header, so this is a coarse backstop, not a security boundary.
+const ipLimiter = rateLimit({
+  windowMs: MINUTE_MS,
+  limit: LIMITS.ipPerMin,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const cf = req.headers['cf-connecting-ip'];
+    return ipKeyGenerator(typeof cf === 'string' && cf ? cf : req.ip);
+  },
+  validate: { xForwardedForHeader: false },
+  message: TOO_MANY_REQUESTS,
+});
+
+const scanMinuteLimiter = uidLimiter(MINUTE_MS, LIMITS.scan.perMin);
+const scanDayLimiter = uidLimiter(DAY_MS, LIMITS.scan.perDay);
+const recipesLimiter = uidLimiter(MINUTE_MS, LIMITS.recipes.perMin);
+const drinksLimiter = uidLimiter(MINUTE_MS, LIMITS.drinks.perMin);
+const mocktailLimiter = uidLimiter(MINUTE_MS, LIMITS.mocktail.perMin);
+const substitutionsLimiter = uidLimiter(MINUTE_MS, LIMITS.substitutions.perMin);
+const supportChatLimiter = uidLimiter(MINUTE_MS, LIMITS.supportChat.perMin);
+const barcodeConfirmLimiter = uidLimiter(MINUTE_MS, LIMITS.barcodeConfirm.perMin);
+const barcodeLookupLimiter = uidLimiter(MINUTE_MS, LIMITS.barcodeLookup.perMin);
+const storeAbbreviationsLimiter = uidLimiter(MINUTE_MS, LIMITS.storeAbbreviations.perMin);
+
+// Scan routes: auth (per route) -> per-uid limits -> the big body parser, so an
+// unauthenticated or rate-limited caller never makes us buffer a 10mb body.
+const scanGuards = [scanMinuteLimiter, scanDayLimiter, express.json({ limit: LIMITS.bodyScan })];
+const SCAN_BODY_PATHS = new Set(['/api/scan', '/api/scan-receipt', '/api/scan-barcode']);
+const defaultJson = express.json({ limit: LIMITS.bodyDefault });
+
 const app = express();
-app.use(express.json({ limit: '15mb' }));
+// cors runs first so 413/429 responses still carry CORS headers and the browser can read them.
 app.use(cors({
   origin: [
     'http://localhost:3004',
@@ -56,6 +124,8 @@ app.use(cors({
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+app.use('/api', ipLimiter);
+app.use((req, res, next) => (SCAN_BODY_PATHS.has(req.path) ? next() : defaultJson(req, res, next)));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
@@ -117,7 +187,7 @@ async function refreshCorrectionsBlock() {
 refreshCorrectionsBlock();
 
 // ── POST /api/scan — OpenAI GPT-4o vision ──────────────────────────────────
-app.post('/api/scan', requireAuth, async (req, res) => {
+app.post('/api/scan', requireAuth, scanGuards, async (req, res) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
 
@@ -768,7 +838,7 @@ async function saveToCatalog(recipes, source) {
 }
 
 // ── POST /api/recipes — Hybrid: TheMealDB + Spoonacular + Claude ────────────
-app.post('/api/recipes', requireAuth, async (req, res) => {
+app.post('/api/recipes', requireAuth, recipesLimiter, async (req, res) => {
   const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights, expiringIngredients, mealTypeHint, seenRecipeIds } = req.body;
   if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
 
@@ -987,7 +1057,7 @@ function appendScanLog(entry) {
   }
 }
 
-app.post('/api/scan-receipt', requireAuth, async (req, res) => {
+app.post('/api/scan-receipt', requireAuth, scanGuards, async (req, res) => {
   const { imageBase64, mimeType, storeName } = req.body;
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
 
@@ -1073,7 +1143,7 @@ Return ONLY a valid JSON object in this exact format, no markdown, no preamble:
 });
 
 // ── POST /api/store-abbreviations/add — learn new abbreviations ─────────────
-app.post('/api/store-abbreviations/add', requireAuth, async (req, res) => {
+app.post('/api/store-abbreviations/add', requireAuth, storeAbbreviationsLimiter, async (req, res) => {
   const { store, abbreviation, fullName } = req.body;
   if (!store || !abbreviation || !fullName) {
     return res.status(400).json({ error: 'store, abbreviation, and fullName are required' });
@@ -1140,7 +1210,7 @@ function packagingUnit(packagingStr) {
 }
 
 // ── GET /api/barcode-lookup — look up a barcode string via verified_products + OFF ─
-app.get('/api/barcode-lookup', requireAuth, async (req, res) => {
+app.get('/api/barcode-lookup', requireAuth, barcodeLookupLimiter, async (req, res) => {
   const { barcode } = req.query;
   if (!barcode) return res.status(400).json({ error: 'barcode required' });
   try {
@@ -1186,7 +1256,7 @@ app.get('/api/barcode-lookup', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/scan-barcode — GPT-4o barcode extraction + Open Food Facts ──────
-app.post('/api/scan-barcode', requireAuth, async (req, res) => {
+app.post('/api/scan-barcode', requireAuth, scanGuards, async (req, res) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
 
@@ -1297,7 +1367,7 @@ app.post('/api/scan-barcode', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/scan-barcode/confirm — record user-verified barcode correction ──
-app.post('/api/scan-barcode/confirm', requireAuth, async (req, res) => {
+app.post('/api/scan-barcode/confirm', requireAuth, barcodeConfirmLimiter, async (req, res) => {
   const { barcode, originalName, name, correctedName, quantity, unit, itemSize, uid, needsReview } = req.body;
   if (!barcode || !name || !uid) return res.status(400).json({ error: 'barcode, name, uid required' });
   if (!adminDb) return res.status(503).json({ error: 'Database unavailable' });
@@ -1343,7 +1413,7 @@ app.post('/api/scan-barcode/confirm', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/substitutions — Anthropic Claude substitution suggestions ──────
-app.post('/api/substitutions', requireAuth, async (req, res) => {
+app.post('/api/substitutions', requireAuth, substitutionsLimiter, async (req, res) => {
   const { ingredient, recipeTitle, recipeContext } = req.body;
   if (!ingredient) return res.status(400).json({ error: 'ingredient is required' });
 
@@ -1997,7 +2067,7 @@ async function generateAIDrinks(category, pantryNames, dietaryFilters, needed) {
 }
 
 // ── POST /api/drinks — Hybrid: BeverageCatalog + TheCocktailDB + Claude ───────
-app.post('/api/drinks', requireAuth, async (req, res) => {
+app.post('/api/drinks', requireAuth, drinksLimiter, async (req, res) => {
   const { ingredients, category, dietaryFilters, seenDrinkIds } = req.body;
   if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
   if (!category) return res.status(400).json({ error: 'category is required' });
@@ -2070,7 +2140,7 @@ app.post('/api/drinks', requireAuth, async (req, res) => {
 });
 
 // ── GET /api/drinks/mocktail/:cocktailId — AI mocktail conversion ─────────────
-app.get('/api/drinks/mocktail/:cocktailId', requireAuth, async (req, res) => {
+app.get('/api/drinks/mocktail/:cocktailId', requireAuth, mocktailLimiter, async (req, res) => {
   const { cocktailId } = req.params;
   if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
   try {
@@ -2969,7 +3039,7 @@ app.delete('/api/admin/beverage-catalog/drinks/:id', verifyAdmin, async (req, re
 });
 
 // ── POST /api/support/chat — Claude-powered support assistant ─────────────────
-app.post('/api/support/chat', requireAuth, async (req, res) => {
+app.post('/api/support/chat', requireAuth, supportChatLimiter, async (req, res) => {
   const { messages, context, sessionId, useSonnet } = req.body;
   if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages required' });
 
