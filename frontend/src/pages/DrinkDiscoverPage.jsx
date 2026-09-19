@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import RecipeCard from '../components/RecipeCard';
 import Spinner from '../components/Spinner';
 import useSeenDrinks from '../hooks/useSeenDrinks';
+import { apiFetch } from '../utils/apiFetch';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 
@@ -129,7 +130,7 @@ function DrinkContent({ category, pantry, toast, savedDrinks, mocktailOnly }) {
     setLoading(true);
     try {
       const formatted = pantry.items.map(i => typeof i === 'string' ? i : `${i.quantity} ${i.unit} ${i.name}`);
-      const resp = await fetch(`${API}/api/drinks`, {
+      const resp = await apiFetch(`${API}/api/drinks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ingredients: formatted, category, dietaryFilters: [], seenDrinkIds: seenDrinks.getSeenIds() }),

@@ -8,6 +8,7 @@ import MadeItSheet from '../components/MadeItSheet';
 import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
 import CreateRecipeSheet from '../components/CreateRecipeSheet';
 import Spinner from '../components/Spinner';
+import { apiFetch } from '../utils/apiFetch';
 
 // ── Saved Recipes constants ───────────────────────────────────────────────────
 const SORT_OPTIONS = [
@@ -123,7 +124,7 @@ function RecipePicker({ onSelect, onClose, savedRecipes, pantryItems, toast, tar
     setLoading(true);
     try {
       const formatted = pantryItems.map(i => typeof i === 'string' ? i : `${i.quantity} ${i.unit} ${i.name}`);
-      const resp = await fetch(`${API}/api/recipes`, {
+      const resp = await apiFetch(`${API}/api/recipes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ingredients: formatted, cuisineHint: 'Any', mealTypeHint: SLOT_HINTS[targetSlot] || '' }),

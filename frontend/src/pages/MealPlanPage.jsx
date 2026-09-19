@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import Spinner from '../components/Spinner';
+import { apiFetch } from '../utils/apiFetch';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const SLOTS = ['breakfast', 'lunch', 'dinner'];
@@ -84,7 +85,7 @@ function RecipePicker({ onSelect, onClose, savedRecipes, pantryItems, toast, tar
     setLoading(true);
     try {
       const formatted = pantryItems.map(i => typeof i === 'string' ? i : `${i.quantity} ${i.unit} ${i.name}`);
-      const resp = await fetch(`${API}/api/recipes`, {
+      const resp = await apiFetch(`${API}/api/recipes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -7,6 +7,7 @@ import CustomizeRecipeSheet from '../components/CustomizeRecipeSheet';
 import CommunityFeed from './CommunityFeed';
 import DrinkDiscoverPage from './DrinkDiscoverPage';
 import useSeenRecipes from '../hooks/useSeenRecipes';
+import { apiFetch } from '../utils/apiFetch';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const CUISINES = ['Any', 'Italian', 'Asian', 'Mexican', 'Quick & Easy', 'Mediterranean'];
@@ -93,7 +94,7 @@ export default function DiscoverPage({ pantry, toast, saved, cookHistory, settin
         }
       }
 
-      const resp = await fetch(`${API}/api/recipes`, {
+      const resp = await apiFetch(`${API}/api/recipes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

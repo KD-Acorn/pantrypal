@@ -117,6 +117,12 @@ function AppContent() {
   const [updateInfo, setUpdateInfo] = useState(null);
   const [showWhatsNewFromUpdate, setShowWhatsNewFromUpdate] = useState(false);
   const toast = useToast();
+  // apiFetch() reports session-expired / rate-limited responses here (see utils/apiFetch.js)
+  useEffect(() => {
+    const onNotice = (e) => toast.show(e.detail?.message || 'Something went wrong. Please try again.', 'error');
+    window.addEventListener('mpc:api-notice', onNotice);
+    return () => window.removeEventListener('mpc:api-notice', onNotice);
+  }, [toast.show]);
   const grocery = useGroceryList(uid);
   const pantry = usePantry(uid, {
     onDepleted: (item) => {

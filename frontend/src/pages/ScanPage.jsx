@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Spinner from '../components/Spinner';
 import { trackEvent } from '../utils/analytics';
 import { useAuth } from '../context/AuthContext';
+import { apiFetch } from '../utils/apiFetch';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 const UNITS = ['item','box','can','bag','bottle','jar','cup','oz','lb','g','ml','l','bunch','clove','slice','pinch','pack','fl oz','gallon'];
@@ -104,7 +105,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     setScanError(null);
     try {
       const { base64, mimeType } = await compressImageToBase64(file);
-      const resp = await fetch(`${API}/api/scan`, {
+      const resp = await apiFetch(`${API}/api/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64: base64, mimeType }),
@@ -129,7 +130,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
         const barcodeResults = await Promise.all(
           detectedBarcodes.map(async (bc) => {
             try {
-              const r = await fetch(`${API}/api/barcode-lookup?barcode=${bc}`);
+              const r = await apiFetch(`${API}/api/barcode-lookup?barcode=${bc}`);
               if (!r.ok) return null;
               const p = await r.json();
               if (p.error) return null;
@@ -171,7 +172,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     setScanError(null);
     try {
       const base64 = await fileToBase64(file);
-      const resp = await fetch(`${API}/api/scan-receipt`, {
+      const resp = await apiFetch(`${API}/api/scan-receipt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64: base64, mimeType: file.type }),
@@ -213,7 +214,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     try {
       const base64 = await fileToBase64(file);
       setLastBarcodeImg({ base64, mimeType: file.type || 'image/jpeg' });
-      const resp = await fetch(`${API}/api/scan-barcode`, {
+      const resp = await apiFetch(`${API}/api/scan-barcode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64: base64, mimeType: file.type }),
@@ -269,7 +270,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     setScanError(null);
     setBarcodeRetryCount(c => c + 1);
     try {
-      const resp = await fetch(`${API}/api/scan-barcode`, {
+      const resp = await apiFetch(`${API}/api/scan-barcode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64: lastBarcodeImg.base64, mimeType: lastBarcodeImg.mimeType }),
@@ -304,7 +305,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
     if (!correctionName.trim() || !barcodeContext?.barcode) return;
     setCorrectionSaving(true);
     try {
-      await fetch(`${API}/api/scan-barcode/confirm`, {
+      await apiFetch(`${API}/api/scan-barcode/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -314,7 +315,6 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
           correctedName: correctionName.trim(),
           quantity: correctionQty,
           unit: correctionUnit,
-          uid: currentUser?.uid || 'anonymous',
           needsReview: true,
         }),
       });
@@ -360,7 +360,7 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
         confirmed.quantity !== original.quantity ||
         confirmed.unit !== original.unit;
       if (wasEdited || !barcodeContext.communityVerified) {
-        fetch(`${API}/api/scan-barcode/confirm`, {
+        apiFetch(`${API}/api/scan-barcode/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -370,7 +370,6 @@ export default function ScanPage({ pantry, toast, grocery, rateLimit }) {
             quantity: confirmed.quantity,
             unit: confirmed.unit,
             itemSize: barcodeContext.itemSize || null,
-            uid: currentUser.uid,
           }),
         }).catch(() => {});
       }

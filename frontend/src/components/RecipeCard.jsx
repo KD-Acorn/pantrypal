@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import SHOPPING_PARTNERS from '../config/shoppingPartners';
 import Spinner from './Spinner';
+import { apiFetch } from '../utils/apiFetch';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 // Key kept as "pantrypal_*" for backward compatibility
@@ -129,7 +130,7 @@ function SubSuggest({ ingredient, recipeTitle, pantry, rateLimit }) {
     }
     setLoading(true);
     try {
-      const resp = await fetch(`${API}/api/substitutions`, {
+      const resp = await apiFetch(`${API}/api/substitutions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ingredient, recipeTitle }),
@@ -265,7 +266,7 @@ export default function RecipeCard({
     if (!id) return;
     setMocktailLoading(true);
     try {
-      const resp = await fetch(`${API}/api/drinks/mocktail/${id}`);
+      const resp = await apiFetch(`${API}/api/drinks/mocktail/${id}`);
       if (!resp.ok) throw new Error('Failed');
       const data = await resp.json();
       setMocktail(data.mocktail);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { addDoc, doc, updateDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { apiFetch } from '../utils/apiFetch';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3003';
 
@@ -126,7 +127,7 @@ export default function SupportChatBubble({ uid, displayName, currentTab, pantry
         .filter(m => !m.isWelcome)
         .map(m => ({ role: m.role, content: m.content, timestamp: m.timestamp }));
 
-      const resp = await fetch(`${API}/api/support/chat`, {
+      const resp = await apiFetch(`${API}/api/support/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: apiMessages, context: buildContext(), sessionId, useSonnet }),
