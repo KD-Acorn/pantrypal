@@ -14,7 +14,7 @@ import cron from 'node-cron';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
-import { validateConfirmPayload, buildConfirmationUpdate } from './utils/barcode.js';
+import { BARCODE_RE, validateConfirmPayload, buildConfirmationUpdate } from './utils/barcode.js';
 import { validateSupportMessages, sanitizeSupportContext, SUPPORT_SESSION_ID_RE } from './utils/supportContext.js';
 import { getUsage, recordUsage, wouldExceedSafetyCap, getTagOffset, setTagOffset, MONTHLY_LIMIT, SAFETY_CAP } from './scripts/tastyQuota.js';
 
@@ -1202,7 +1202,10 @@ function packagingUnit(packagingStr) {
 // ── GET /api/barcode-lookup — look up a barcode string via verified_products + OFF ─
 app.get('/api/barcode-lookup', requireAuth, barcodeLookupLimiter, async (req, res) => {
   const { barcode } = req.query;
-  if (!barcode) return res.status(400).json({ error: 'barcode required' });
+  // Validated before use as a Firestore doc id and in the Open Food Facts URL below.
+  if (typeof barcode !== 'string' || !BARCODE_RE.test(barcode)) {
+    return res.status(400).json({ error: 'barcode must be 6-14 digits' });
+  }
   try {
     if (adminDb) {
       try {
@@ -1219,7 +1222,7 @@ app.get('/api/barcode-lookup', requireAuth, barcodeLookupLimiter, async (req, re
         }
       } catch { /* non-fatal */ }
     }
-    const offResp = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+    const offResp = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(barcode)}.json`);
     const offData = await offResp.json();
     if (!offData || offData.status === 0) return res.json({ error: 'not_found', barcode });
     const product = offData.product || {};
@@ -1241,7 +1244,7 @@ app.get('/api/barcode-lookup', requireAuth, barcodeLookupLimiter, async (req, re
     res.json({ name: ingredientName, quantity, unit, productName, brand, barcode, itemSize: resolvedItemSize });
   } catch (err) {
     console.error('Barcode lookup error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal error' });
   }
 });
 
