@@ -5,3 +5,6 @@ dist/
 frontend/src/firebase.js
 backend/serviceAccount.json
 backend/serviceAccount.json
+
+# receipt scan log (runtime data, append-only JSONL + rotated file)
+backend/data/receiptScanLog.jsonl*

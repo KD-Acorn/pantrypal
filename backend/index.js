@@ -14,6 +14,7 @@ import cron from 'node-cron';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
+import { createScanLogger } from './utils/scanLog.js';
 import { splitMeasure } from './utils/measure.js';
 import { validatePushSubscription } from './utils/pushEndpoint.js';
 import { BARCODE_RE, validateConfirmPayload, buildConfirmationUpdate } from './utils/barcode.js';
@@ -1046,16 +1047,12 @@ function loadStoreAbbreviations() {
   catch { return {}; }
 }
 
-function appendScanLog(entry) {
-  const logPath = resolve(__dirname, 'data', 'receiptScanLog.json');
-  try {
-    const log = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-    log.push(entry);
-    fs.writeFileSync(logPath, JSON.stringify(log, null, 2));
-  } catch {
-    fs.writeFileSync(logPath, JSON.stringify([entry], null, 2));
-  }
-}
+// receiptScanLog.jsonl is append-only, rotated to receiptScanLog.jsonl.1 at 5 MB.
+// (The old receiptScanLog.json array file is no longer written.)
+const appendScanLog = createScanLogger({
+  path: resolve(__dirname, 'data', 'receiptScanLog.jsonl'),
+  maxBytes: 5 * 1024 * 1024,
+});
 
 app.post('/api/scan-receipt', requireAuth, scanGuards, async (req, res) => {
   const { imageBase64, mimeType, storeName } = req.body;
