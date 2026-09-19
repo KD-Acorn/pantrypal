@@ -59,6 +59,31 @@ app.use(cors({
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+// ── Auth middleware ──────────────────────────────────────────────────────────
+// Verifies `Authorization: Bearer <Firebase ID token>` and sets req.uid / req.email.
+// A missing, malformed, invalid or expired token is always a 401, never a 500 —
+// verifyIdToken() has its own try/catch so a throw can't fall through to the
+// route's error handling. If the Admin SDK isn't initialized we fail closed (503).
+async function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid auth token' });
+  }
+  const token = authHeader.slice('Bearer '.length).trim();
+  if (!token) return res.status(401).json({ error: 'Missing or invalid auth token' });
+  if (!adminAuth) return res.status(503).json({ error: 'Authentication temporarily unavailable' });
+
+  let decoded;
+  try {
+    decoded = await adminAuth.verifyIdToken(token);
+  } catch {
+    return res.status(401).json({ error: 'Missing or invalid auth token' });
+  }
+  req.uid = decoded.uid;
+  if (decoded.email) req.email = decoded.email;
+  next();
+}
+
 // ── Category corrections cache — refreshed hourly, injected into scan prompt ─
 let _correctionsBlock = '';
 let _correctionsBlockAt = 0;
@@ -92,7 +117,7 @@ async function refreshCorrectionsBlock() {
 refreshCorrectionsBlock();
 
 // ── POST /api/scan — OpenAI GPT-4o vision ──────────────────────────────────
-app.post('/api/scan', async (req, res) => {
+app.post('/api/scan', requireAuth, async (req, res) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
 
@@ -743,7 +768,7 @@ async function saveToCatalog(recipes, source) {
 }
 
 // ── POST /api/recipes — Hybrid: TheMealDB + Spoonacular + Claude ────────────
-app.post('/api/recipes', async (req, res) => {
+app.post('/api/recipes', requireAuth, async (req, res) => {
   const { ingredients, cuisineHint, dietaryFilters, cookTimeMax, difficulty, cuisineWeights, expiringIngredients, mealTypeHint, seenRecipeIds } = req.body;
   if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
 
@@ -962,7 +987,7 @@ function appendScanLog(entry) {
   }
 }
 
-app.post('/api/scan-receipt', async (req, res) => {
+app.post('/api/scan-receipt', requireAuth, async (req, res) => {
   const { imageBase64, mimeType, storeName } = req.body;
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
 
@@ -1048,7 +1073,7 @@ Return ONLY a valid JSON object in this exact format, no markdown, no preamble:
 });
 
 // ── POST /api/store-abbreviations/add — learn new abbreviations ─────────────
-app.post('/api/store-abbreviations/add', async (req, res) => {
+app.post('/api/store-abbreviations/add', requireAuth, async (req, res) => {
   const { store, abbreviation, fullName } = req.body;
   if (!store || !abbreviation || !fullName) {
     return res.status(400).json({ error: 'store, abbreviation, and fullName are required' });
@@ -1115,7 +1140,7 @@ function packagingUnit(packagingStr) {
 }
 
 // ── GET /api/barcode-lookup — look up a barcode string via verified_products + OFF ─
-app.get('/api/barcode-lookup', async (req, res) => {
+app.get('/api/barcode-lookup', requireAuth, async (req, res) => {
   const { barcode } = req.query;
   if (!barcode) return res.status(400).json({ error: 'barcode required' });
   try {
@@ -1161,7 +1186,7 @@ app.get('/api/barcode-lookup', async (req, res) => {
 });
 
 // ── POST /api/scan-barcode — GPT-4o barcode extraction + Open Food Facts ──────
-app.post('/api/scan-barcode', async (req, res) => {
+app.post('/api/scan-barcode', requireAuth, async (req, res) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 is required' });
 
@@ -1272,7 +1297,7 @@ app.post('/api/scan-barcode', async (req, res) => {
 });
 
 // ── POST /api/scan-barcode/confirm — record user-verified barcode correction ──
-app.post('/api/scan-barcode/confirm', async (req, res) => {
+app.post('/api/scan-barcode/confirm', requireAuth, async (req, res) => {
   const { barcode, originalName, name, correctedName, quantity, unit, itemSize, uid, needsReview } = req.body;
   if (!barcode || !name || !uid) return res.status(400).json({ error: 'barcode, name, uid required' });
   if (!adminDb) return res.status(503).json({ error: 'Database unavailable' });
@@ -1318,7 +1343,7 @@ app.post('/api/scan-barcode/confirm', async (req, res) => {
 });
 
 // ── POST /api/substitutions — Anthropic Claude substitution suggestions ──────
-app.post('/api/substitutions', async (req, res) => {
+app.post('/api/substitutions', requireAuth, async (req, res) => {
   const { ingredient, recipeTitle, recipeContext } = req.body;
   if (!ingredient) return res.status(400).json({ error: 'ingredient is required' });
 
@@ -1972,7 +1997,7 @@ async function generateAIDrinks(category, pantryNames, dietaryFilters, needed) {
 }
 
 // ── POST /api/drinks — Hybrid: BeverageCatalog + TheCocktailDB + Claude ───────
-app.post('/api/drinks', async (req, res) => {
+app.post('/api/drinks', requireAuth, async (req, res) => {
   const { ingredients, category, dietaryFilters, seenDrinkIds } = req.body;
   if (!ingredients?.length) return res.status(400).json({ error: 'ingredients array is required' });
   if (!category) return res.status(400).json({ error: 'category is required' });
@@ -2045,7 +2070,7 @@ app.post('/api/drinks', async (req, res) => {
 });
 
 // ── GET /api/drinks/mocktail/:cocktailId — AI mocktail conversion ─────────────
-app.get('/api/drinks/mocktail/:cocktailId', async (req, res) => {
+app.get('/api/drinks/mocktail/:cocktailId', requireAuth, async (req, res) => {
   const { cocktailId } = req.params;
   if (!adminDb) return res.status(500).json({ error: 'Database unavailable' });
   try {
@@ -2944,7 +2969,7 @@ app.delete('/api/admin/beverage-catalog/drinks/:id', verifyAdmin, async (req, re
 });
 
 // ── POST /api/support/chat — Claude-powered support assistant ─────────────────
-app.post('/api/support/chat', async (req, res) => {
+app.post('/api/support/chat', requireAuth, async (req, res) => {
   const { messages, context, sessionId, useSonnet } = req.body;
   if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages required' });
 
