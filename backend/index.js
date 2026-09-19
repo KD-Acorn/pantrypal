@@ -109,6 +109,9 @@ const SCAN_BODY_PATHS = new Set(['/api/scan', '/api/scan-receipt', '/api/scan-ba
 const defaultJson = express.json({ limit: LIMITS.bodyDefault });
 
 const app = express();
+app.disable('x-powered-by');
+// JSON API, so helmet's defaults are fine. HSTS is deliberately left to Cloudflare, not set here.
+app.use(helmet({ hsts: false }));
 // cors runs first so 413/429 responses still carry CORS headers and the browser can read them.
 app.use(cors({
   origin: [
