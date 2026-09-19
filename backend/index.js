@@ -14,6 +14,7 @@ import cron from 'node-cron';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
+import { splitMeasure } from './utils/measure.js';
 import { validatePushSubscription } from './utils/pushEndpoint.js';
 import { BARCODE_RE, validateConfirmPayload, buildConfirmationUpdate } from './utils/barcode.js';
 import { validateSupportMessages, sanitizeSupportContext, SUPPORT_SESSION_ID_RE } from './utils/supportContext.js';
@@ -325,13 +326,8 @@ function parseMealDBIngredients(meal) {
     const name = (meal[`strIngredient${i}`] || '').trim();
     if (!name) break;
     const measure = (meal[`strMeasure${i}`] || '').trim();
-    const amountMatch = measure.match(/^([\d.\/]+)/);
-    let amount = 1;
-    if (amountMatch) {
-      const raw = amountMatch[1];
-      amount = raw.includes('/') ? eval(raw) : parseFloat(raw) || 1;
-    }
-    const rawUnit = measure.replace(/^[\d.\/]+\s*/, '').trim() || 'whole';
+    const { amount, rawUnit: measureUnit } = splitMeasure(measure);
+    const rawUnit = measureUnit || 'whole';
     out.push({ amount: Math.round(amount * 100) / 100, unit: normalizeUnit(rawUnit), name: name.toLowerCase() });
   }
   return out;
@@ -1874,13 +1870,8 @@ function parseCocktailDBDrink(drink) {
     const name = (drink[`strIngredient${i}`] || '').trim();
     if (!name) break;
     const measure = (drink[`strMeasure${i}`] || '').trim();
-    const amountMatch = measure.match(/^([\d.\/]+)/);
-    let amount = 1;
-    if (amountMatch) {
-      const raw = amountMatch[1];
-      amount = raw.includes('/') ? eval(raw) : parseFloat(raw) || 1;
-    }
-    const rawUnit = measure.replace(/^[\d.\/]+\s*/, '').trim() || 'whole';
+    const { amount, rawUnit: measureUnit } = splitMeasure(measure);
+    const rawUnit = measureUnit || 'whole';
     ingredients.push({ amount: Math.round(amount * 100) / 100, unit: normalizeUnit(rawUnit), name: name.toLowerCase() });
   }
   const instructions = drink.strInstructions || '';

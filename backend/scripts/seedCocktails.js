@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { contentSafetyCheck } from '../utils/catalogClassifier.js';
+import { splitMeasure } from '../utils/measure.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '..', '..', '.env') });
@@ -35,14 +36,8 @@ function parseDrink(drink) {
     const name = (drink[`strIngredient${i}`] || '').trim();
     if (!name) break;
     const measure = (drink[`strMeasure${i}`] || '').trim();
-    const amountMatch = measure.match(/^([\d.\/]+)/);
-    let amount = 1;
-    if (amountMatch) {
-      const raw = amountMatch[1];
-      // eslint-disable-next-line no-eval
-      amount = raw.includes('/') ? eval(raw) : parseFloat(raw) || 1;
-    }
-    const rawUnit = measure.replace(/^[\d.\/]+\s*/, '').trim() || 'whole';
+    const { amount, rawUnit: measureUnit } = splitMeasure(measure);
+    const rawUnit = measureUnit || 'whole';
     ingredients.push({ amount: Math.round(amount * 100) / 100, unit: normalizeUnit(rawUnit), name: name.toLowerCase() });
   }
   const instructions = drink.strInstructions || '';
