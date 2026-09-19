@@ -57,7 +57,6 @@ const LIMITS = {
   supportChat: { perMin: 10 },
   barcodeConfirm: { perMin: 30 },
   barcodeLookup: { perMin: 30 },
-  storeAbbreviations: { perMin: 10 },
   bodyDefault: '1mb',                  // every route except the scan routes
   bodyScan: '10mb',                    // base64 images on the three scan routes only
 };
@@ -101,7 +100,6 @@ const substitutionsLimiter = uidLimiter(MINUTE_MS, LIMITS.substitutions.perMin);
 const supportChatLimiter = uidLimiter(MINUTE_MS, LIMITS.supportChat.perMin);
 const barcodeConfirmLimiter = uidLimiter(MINUTE_MS, LIMITS.barcodeConfirm.perMin);
 const barcodeLookupLimiter = uidLimiter(MINUTE_MS, LIMITS.barcodeLookup.perMin);
-const storeAbbreviationsLimiter = uidLimiter(MINUTE_MS, LIMITS.storeAbbreviations.perMin);
 
 // Scan routes: auth (per route) -> per-uid limits -> the big body parser, so an
 // unauthenticated or rate-limited caller never makes us buffer a 10mb body.
@@ -1146,26 +1144,13 @@ Return ONLY a valid JSON object in this exact format, no markdown, no preamble:
   }
 });
 
-// ── POST /api/store-abbreviations/add — learn new abbreviations ─────────────
-app.post('/api/store-abbreviations/add', requireAuth, storeAbbreviationsLimiter, async (req, res) => {
-  const { store, abbreviation, fullName } = req.body;
-  if (!store || !abbreviation || !fullName) {
-    return res.status(400).json({ error: 'store, abbreviation, and fullName are required' });
-  }
-
-  try {
-    const filePath = resolve(__dirname, 'data', 'storeAbbreviations.json');
-    const all = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    const key = store.toLowerCase().trim();
-    if (!all[key]) all[key] = {};
-    all[key][abbreviation] = fullName;
-    fs.writeFileSync(filePath, JSON.stringify(all, null, 2));
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Abbreviation add error:', err);
-    res.status(500).json({ error: 'Failed to save abbreviation' });
-  }
-});
+// NOTE: POST /api/store-abbreviations/add was removed — nothing calls it, and the
+// original handler let a request-supplied `store` key index a plain object
+// (prototype pollution). data/storeAbbreviations.json and loadStoreAbbreviations()
+// above are still used by /api/scan-receipt. If a write route is ever re-added it
+// MUST be admin-only (verifyAdmin), validate `store` against a key allowlist, and
+// keep the data in a prototype-safe map (Map / Object.create(null)), never a plain
+// object keyed by request input.
 
 function parseOFFQuantity(quantityStr) {
   if (!quantityStr) return { quantity: 1, unit: 'item' };
