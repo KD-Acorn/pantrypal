@@ -14,6 +14,7 @@ import cron from 'node-cron';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
+import { validateConfirmPayload, buildConfirmationUpdate } from './utils/barcode.js';
 import { validateSupportMessages, sanitizeSupportContext, SUPPORT_SESSION_ID_RE } from './utils/supportContext.js';
 import { getUsage, recordUsage, wouldExceedSafetyCap, getTagOffset, setTagOffset, MONTHLY_LIMIT, SAFETY_CAP } from './scripts/tastyQuota.js';
 
@@ -1330,9 +1331,11 @@ app.post('/api/scan-barcode', requireAuth, scanGuards, async (req, res) => {
       ingredientName = sizeLabel ? `${productName} (${sizeLabel})` : productName;
     }
 
-    // Save to verified_products with confirmCount 0 (seeds the cache)
+    // Seed verified_products with confirmCount 0. create() (not a merge-set) so an
+    // existing doc keeps its confirmedBy/confirmCount and any user-corrected data —
+    // a merge-set here used to reset confirmCount to 0 on every non-verified scan.
     if (adminDb) {
-      adminDb.collection('verified_products').doc(barcode).set({
+      adminDb.collection('verified_products').doc(barcode).create({
         barcode,
         originalName: productName,
         name: ingredientName,
@@ -1340,9 +1343,10 @@ app.post('/api/scan-barcode', requireAuth, scanGuards, async (req, res) => {
         unit,
         itemSize: resolvedItemSize,
         confirmCount: 0,
+        confirmedBy: [],
         lastConfirmedAt: FieldValue.serverTimestamp(),
         source: 'open_food_facts',
-      }, { merge: true }).catch(() => {});
+      }).catch(() => {}); // ALREADY_EXISTS is expected and fine
     }
 
     res.json({
@@ -1356,48 +1360,30 @@ app.post('/api/scan-barcode', requireAuth, scanGuards, async (req, res) => {
 });
 
 // ── POST /api/scan-barcode/confirm — record user-verified barcode correction ──
+// uid is always the verified token's uid (req.uid); a uid in the body is ignored.
+// One confirmation per uid per barcode: confirmedBy holds the distinct confirmers and
+// confirmCount only increments for a uid that is not already in it.
 app.post('/api/scan-barcode/confirm', requireAuth, barcodeConfirmLimiter, async (req, res) => {
-  const { barcode, originalName, name, correctedName, quantity, unit, itemSize, uid, needsReview } = req.body;
-  if (!barcode || !name || !uid) return res.status(400).json({ error: 'barcode, name, uid required' });
+  const checked = validateConfirmPayload(req.body);
+  if (!checked.ok) return res.status(400).json({ error: checked.error });
   if (!adminDb) return res.status(503).json({ error: 'Database unavailable' });
+  const { barcode } = checked.value;
+  const uid = req.uid;
+
   try {
     const ref = adminDb.collection('verified_products').doc(barcode);
-    const snap = await ref.get();
-    if (snap.exists) {
-      const updateData = {
-        name, quantity, unit, itemSize: itemSize || null,
-        originalName: originalName || snap.data().originalName,
-        confirmedBy: uid,
-        confirmCount: FieldValue.increment(1),
-        lastConfirmedAt: FieldValue.serverTimestamp(),
-        source: 'user_correction',
-      };
-      if (needsReview) {
-        updateData.needsReview = true;
-        updateData.correctedName = correctedName || name;
-        updateData.reportedBy = uid;
-        updateData.reportedAt = FieldValue.serverTimestamp();
-      }
-      await ref.update(updateData);
-    } else {
-      const setData = {
-        barcode, originalName: originalName || name, name, quantity, unit,
-        itemSize: itemSize || null, confirmedBy: uid,
-        confirmCount: 1, lastConfirmedAt: FieldValue.serverTimestamp(),
-        source: 'user_correction',
-      };
-      if (needsReview) {
-        setData.needsReview = true;
-        setData.correctedName = correctedName || name;
-        setData.reportedBy = uid;
-        setData.reportedAt = FieldValue.serverTimestamp();
-      }
-      await ref.set(setData);
-    }
+    await adminDb.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const existing = snap.exists ? snap.data() : null;
+      const data = buildConfirmationUpdate(existing, uid, checked.value, FieldValue.serverTimestamp());
+      if (!data) return; // this uid already confirmed this barcode — no-op, still 200
+      if (existing) tx.update(ref, data);
+      else tx.set(ref, { barcode, ...data });
+    });
     res.json({ ok: true });
   } catch (err) {
     console.error('Barcode confirm error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Internal error' });
   }
 });
 
