@@ -7,6 +7,17 @@ service cloud.firestore {
              request.auth.uid == 'gTCwD1bHALeeNZ7wDNbt9sSEL8x1';
     }
 
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Membership is read from the household doc's memberUids, which only the backend writes
+    // (Admin SDK). get() on a household id that does not exist is an error, i.e. denied.
+    function isMember(hid) {
+      return signedIn() &&
+        request.auth.uid in get(/databases/$(database)/documents/households/$(hid)).data.memberUids;
+    }
+
     match /push_subscriptions/{docId} {
       allow read: if request.auth != null && request.auth.uid == docId;
       allow write: if false; // only the Admin SDK (server) writes this collection
@@ -73,25 +84,35 @@ service cloud.firestore {
       allow create: if request.auth != null &&
         request.resource.data.uid == request.auth.uid;
     }
+    // Households: members can read; every change (create, join, leave, roles, settings, rotate code,
+    // disband) goes through the backend endpoints (Admin SDK), so clients never write this collection.
+    // The listener query is where('memberUids', 'array-contains', uid).
     match /households/{householdId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
+      allow read: if signedIn() && request.auth.uid in resource.data.memberUids;
+      allow write: if false;
     }
+    // Shared data stays on the client SDK, gated on membership. addedBy is bound to the caller on create
+    // (the app always sends its own uid). Meal-plan days carry no uid and recipes have no creator
+    // in the app today, so those get no field checks.
     match /household_pantry/{householdId}/items/{itemId} {
-      allow read, write: if request.auth != null;
+      allow read: if isMember(householdId);
+      allow create: if isMember(householdId) && request.resource.data.addedBy == request.auth.uid;
+      allow update, delete: if isMember(householdId);
     }
     match /household_recipes/{householdId}/recipes/{recipeId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isMember(householdId);
     }
     match /household_meal_plan/{householdId}/days/{date} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isMember(householdId);
     }
+    // Activity is append-only for clients (the server also writes join/leave/remove events).
     match /household_activity/{householdId}/events/{eventId} {
-      allow read, write: if request.auth != null;
+      allow read: if isMember(householdId);
+      allow create: if isMember(householdId) && request.resource.data.uid == request.auth.uid;
     }
+    // Server-only. Email invites are not built yet (post-launch item #33).
     match /household_invites/{email} {
-      allow read, write: if request.auth != null;
+      allow read, write: if false;
     }
     match /pending_deletions/{docId} {
       allow read, write: if request.auth != null &&
