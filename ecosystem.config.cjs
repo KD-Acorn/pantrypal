@@ -17,7 +17,7 @@ module.exports = {
     {
       name: 'pantrypal-front',
       script: 'npx',
-      args: 'vite preview --port 3004 --host',
+      args: 'vite preview --port 3004 --host 127.0.0.1',
       cwd: path.resolve(__dirname, 'frontend'),
       env: {
         NODE_ENV: 'production',
@@ -26,7 +26,7 @@ module.exports = {
     {
       name: 'mpc-admin',
       script: 'npx',
-      args: 'vite preview --port 3005 --host',
+      args: 'vite preview --port 3005 --host 127.0.0.1',
       cwd: path.resolve(__dirname, 'admin'),
       env: {
         NODE_ENV: 'production',

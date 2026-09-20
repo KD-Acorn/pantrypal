@@ -3182,4 +3182,4 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3003;
-app.listen(PORT, () => console.log(`My Pantry Club API listening on :${PORT}`));
+app.listen(PORT, '127.0.0.1', () => console.log(`My Pantry Club API listening on :${PORT}`));
