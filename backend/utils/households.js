@@ -194,3 +194,55 @@ export const HOUSEHOLD_SUBCOLLECTION_ROOTS = ['household_pantry', 'household_rec
 export async function deleteHouseholdSubcollections(db, hid) {
   await Promise.all(HOUSEHOLD_SUBCOLLECTION_ROOTS.map((root) => db.recursiveDelete(db.collection(root).doc(hid))));
 }
+
+// ── account deletion ─────────────────────────────────────────────────────────
+
+// What deleting `uid`'s account does to one household document (pure; no I/O).
+//  owner + a co-admin exists  -> 'handoff': earliest-joined co-admin (parsed joinedAt) becomes owner/createdBy,
+//                                the deleted user leaves members AND memberUids together
+//  owner, no co-admin         -> 'disband': soft-disband flags, as before (members left as they were)
+//  anyone else in members     -> 'remove': leave members AND memberUids together; `empty` if nobody is left
+//  already disbanded owner / not a member at all -> 'none'
+export function planAccountDeletion(hh, uid, now) {
+  const members = Array.isArray(hh.members) ? hh.members : [];
+  const isOwner = hh.createdBy === uid || getMemberRole(hh, uid) === 'owner';
+  if (isOwner) {
+    if (hh.disbanded === true) return { action: 'none' };
+    const others = members.filter((m) => m.uid !== uid);
+    const next = sortCoAdminsByJoinedAt(others)[0];
+    if (next) {
+      const remaining = others.map((m) => (m.uid === next.uid ? { ...m, role: 'owner' } : m));
+      return { action: 'handoff', update: { createdBy: next.uid, ...writeMembers(remaining) }, empty: false };
+    }
+    return { action: 'disband', update: { disbanded: true, disbandedAt: now, disbandedReason: 'owner_deleted_account' }, empty: false };
+  }
+  const isMember = members.some((m) => m.uid === uid) || (Array.isArray(hh.memberUids) && hh.memberUids.includes(uid));
+  if (!isMember) return { action: 'none' };
+  const remaining = members.filter((m) => m.uid !== uid);
+  return { action: 'remove', update: writeMembers(remaining), empty: remaining.length === 0 };
+}
+
+// Applies planAccountDeletion to every household the user owns or belongs to. Membership is found with
+// where('memberUids','array-contains',uid) (plus createdBy == uid), not a full-collection scan.
+// deleteEmpty: a household left with no members is deleted together with its four household_* trees.
+export async function applyAccountDeletion(db, uid, { deleteEmpty = false, now } = {}) {
+  const col = db.collection('households');
+  const [owned, member] = await Promise.all([col.where('createdBy', '==', uid).get(), col.where('memberUids', 'array-contains', uid).get()]);
+  const ids = [...new Set([...owned.docs, ...member.docs].map((d) => d.id))];
+  const counts = { handoff: 0, disband: 0, remove: 0, deleted: 0 };
+  for (const hid of ids) {
+    const ref = col.doc(hid);
+    const plan = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return { action: 'none' };
+      const p = planAccountDeletion(snap.data(), uid, now);
+      if (p.action === 'none') return p;
+      if (deleteEmpty && p.empty) { tx.delete(ref); return { ...p, deleted: true }; }
+      tx.update(ref, p.update);
+      return p;
+    });
+    if (plan.action !== 'none') counts[plan.action]++;
+    if (plan.deleted) { await deleteHouseholdSubcollections(db, hid); counts.deleted++; }
+  }
+  return counts;
+}

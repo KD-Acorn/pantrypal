@@ -15,6 +15,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
 import { registerHouseholdRoutes } from './routes/households.js';
+import { applyAccountDeletion } from './utils/households.js';
 import { createScanLogger } from './utils/scanLog.js';
 import { splitMeasure } from './utils/measure.js';
 import { validatePushSubscription } from './utils/pushEndpoint.js';
@@ -1446,54 +1447,16 @@ registerHouseholdRoutes(app, {
 });
 
 // ── POST /api/delete-account — Account deletion with 7-day grace period ──────
-app.post('/api/delete-account', async (req, res) => {
-  if (!adminAuth) return res.status(503).json({ error: 'Account deletion temporarily unavailable. Please contact support.' });
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing auth token' });
-  }
-
+app.post('/api/delete-account', requireAuth, async (req, res) => {
   try {
-    const token = authHeader.split('Bearer ')[1];
-    const decoded = await adminAuth.verifyIdToken(token);
-    const uid = decoded.uid;
-    const email = decoded.email || '';
+    const uid = req.uid;
+    const email = req.email || '';
 
     const scheduledFor = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    // Handle household ownership
-    const householdsSnap = await adminDb.collection('households').where('createdBy', '==', uid).get();
-    for (const hDoc of householdsSnap.docs) {
-      const hData = hDoc.data();
-      const members = hData.members || [];
-      const coAdmins = members.filter(m => m.role === 'co-admin').sort((a, b) =>
-        (a.joinedAt?.toDate?.() || 0) - (b.joinedAt?.toDate?.() || 0)
-      );
-      if (coAdmins.length > 0) {
-        const newOwner = coAdmins[0];
-        const updatedMembers = members.map(m =>
-          m.uid === newOwner.uid ? { ...m, role: 'owner' } : m
-        ).filter(m => m.uid !== uid);
-        await hDoc.ref.update({ createdBy: newOwner.uid, members: updatedMembers });
-      } else {
-        await hDoc.ref.update({
-          disbanded: true,
-          disbandedAt: FieldValue.serverTimestamp(),
-          disbandedReason: 'owner_deleted_account',
-        });
-      }
-    }
-
-    // Remove from households where just a member
-    const allHouseholdsSnap = await adminDb.collection('households').get();
-    for (const hDoc of allHouseholdsSnap.docs) {
-      const members = hDoc.data().members || [];
-      if (members.some(m => m.uid === uid) && hDoc.data().createdBy !== uid) {
-        await hDoc.ref.update({
-          members: members.filter(m => m.uid !== uid),
-        });
-      }
-    }
+    // Households: owner hands off to the earliest-joined co-admin (else soft-disband); anyone else
+    // just leaves. members and memberUids always change together (utils/households.js).
+    await applyAccountDeletion(adminDb, uid, { now: FieldValue.serverTimestamp() });
 
     // Anonymize public recipes
     const publicSnap = await adminDb.collection('public_recipes').where('authorUid', '==', uid).get();
@@ -1542,14 +1505,9 @@ async function deleteSubcollection(parentPath, subcollection) {
   await batch.commit();
 }
 
-app.post('/api/delete-account/now', async (req, res) => {
-  if (!adminAuth) return res.status(503).json({ error: 'Account deletion temporarily unavailable. Please contact support.' });
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Missing auth token' });
-
+app.post('/api/delete-account/now', requireAuth, async (req, res) => {
   try {
-    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
-    const uid = decoded.uid;
+    const uid = req.uid;
 
     await Promise.all([
       deleteSubcollection(`pantry/${uid}`, 'items'),
@@ -1560,31 +1518,9 @@ app.post('/api/delete-account/now', async (req, res) => {
       deleteSubcollection(`meal_plan/${uid}`, 'days'),
     ]);
 
-    // Handle households
-    const ownedSnap = await adminDb.collection('households').where('createdBy', '==', uid).get();
-    for (const hDoc of ownedSnap.docs) {
-      const members = hDoc.data().members || [];
-      const coAdmins = members.filter(m => m.role === 'co-admin').sort((a, b) =>
-        (a.joinedAt?.toDate?.() || 0) - (b.joinedAt?.toDate?.() || 0)
-      );
-      if (coAdmins.length > 0) {
-        const newOwner = coAdmins[0];
-        await hDoc.ref.update({
-          createdBy: newOwner.uid,
-          members: members.map(m => m.uid === newOwner.uid ? { ...m, role: 'owner' } : m).filter(m => m.uid !== uid),
-        });
-      } else {
-        await hDoc.ref.update({ disbanded: true, disbandedAt: FieldValue.serverTimestamp(), disbandedReason: 'owner_deleted_account' });
-      }
-    }
-
-    const allHH = await adminDb.collection('households').get();
-    for (const hDoc of allHH.docs) {
-      const members = hDoc.data().members || [];
-      if (members.some(m => m.uid === uid) && hDoc.data().createdBy !== uid) {
-        await hDoc.ref.update({ members: members.filter(m => m.uid !== uid) });
-      }
-    }
+    // Households: same as the grace-period route, plus a household the user leaves with no members is
+    // deleted along with its household_* subcollections.
+    await applyAccountDeletion(adminDb, uid, { deleteEmpty: true, now: FieldValue.serverTimestamp() });
 
     // Anonymize public recipes
     const publicSnap = await adminDb.collection('public_recipes').where('authorUid', '==', uid).get();

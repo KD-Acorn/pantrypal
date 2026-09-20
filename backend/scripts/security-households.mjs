@@ -342,5 +342,80 @@ section('9. disband');
   eq('former owner can create a new household', (await api('POST', '/api/households', owner, { name: 'Round two' })).status, 201);
 }
 
+// ── 10. account deletion ─────────────────────────────────────────────────────
+section('10. account deletion: /api/delete-account (grace) and /api/delete-account/now');
+{
+  const routes = ['/api/delete-account', '/api/delete-account/now'];
+  for (const r of routes) {
+    const res = [];
+    for (const rawToken of [undefined, 'garbage', expiredToken, 'aaaa.bbbb.cccc']) res.push((await api('POST', r, null, {}, { rawToken })).status);
+    eq(`POST ${r} -> 401 (never 500) for no/garbage/expired token`, res, [401, 401, 401, 401]);
+  }
+
+  const mem = (u, role, joinedAt) => ({ uid: u.uid, displayName: u.label, email: '', role, joinedAt });
+  // S1: owner deletes (grace) — co-admins listed in the WRONG order to prove handoff sorts by parsed joinedAt
+  {
+    const O = await newUser('del-owner'), X = await newUser('del-late'), Y = await newUser('del-early'), M = await newUser('del-mem');
+    await seedHousehold('hh_del1', { ownerUid: O.uid, extraMembers: [mem(X, 'co-admin', '2026-05-01T00:00:00.000Z'), mem(Y, 'co-admin', '2026-02-01T00:00:00.000Z'), mem(M, 'member', '2026-03-01T00:00:00.000Z')], code: 'DEL1AAAA' });
+    const r = await api('POST', '/api/delete-account', O, {});
+    eq('owner deletes account (grace) -> 200', r.status, 200);
+    const d = await hhDoc('hh_del1');
+    eq('handoff to the earliest-joined co-admin', [d.createdBy === Y.uid, d.members.find((m) => m.uid === Y.uid)?.role], [true, 'owner']);
+    ok('deleted owner is out of members AND memberUids (they change together)', consistent(d) && !uidsOf(d).includes(O.uid) && d.members.length === 3, JSON.stringify(uidsOf(d)));
+  }
+  // S2: owner, no co-admin -> soft disband (existing semantics)
+  {
+    const O = await newUser('sd-owner'), M = await newUser('sd-mem');
+    await seedHousehold('hh_del2', { ownerUid: O.uid, extraMembers: [mem(M, 'member', '2026-03-01T00:00:00.000Z')], code: 'DEL2AAAA' });
+    await api('POST', '/api/delete-account', O, {});
+    const d = await hhDoc('hh_del2');
+    eq('no co-admin -> soft-disbanded, members untouched', [d.disbanded, d.disbandedReason, d.members.length, consistent(d)], [true, 'owner_deleted_account', 2, true]);
+    // the deleted user cancels: ownership is NOT restored (out of scope, unchanged behavior)
+    await api('POST', '/api/delete-account/cancel', O, {});
+    eq('cancel does not restore ownership (unchanged, out of scope)', (await hhDoc('hh_del2')).disbanded, true);
+  }
+  // S3: plain member deletes (grace) -> leaves both arrays
+  {
+    const O = await newUser('m-owner'), P = await newUser('m-member');
+    await seedHousehold('hh_del3', { ownerUid: O.uid, extraMembers: [mem(P, 'member', '2026-03-01T00:00:00.000Z')], code: 'DEL3AAAA' });
+    await api('POST', '/api/delete-account', P, {});
+    const d = await hhDoc('hh_del3');
+    ok('member removed from members AND memberUids, owner kept', consistent(d) && !uidsOf(d).includes(P.uid) && uidsOf(d).includes(O.uid), JSON.stringify(uidsOf(d)));
+  }
+  // S4: /now for a plain member
+  {
+    const O = await newUser('n-owner'), Q = await newUser('n-member');
+    await seedHousehold('hh_del4', { ownerUid: O.uid, extraMembers: [mem(Q, 'member', '2026-03-01T00:00:00.000Z')], code: 'DEL4AAAA' });
+    const r = await api('POST', '/api/delete-account/now', Q, {});
+    eq('/now for a member -> 200', r.status, 200);
+    const d = await hhDoc('hh_del4');
+    ok('/now removes the deleted user from members AND memberUids of a household they only belonged to', consistent(d) && !uidsOf(d).includes(Q.uid) && uidsOf(d).includes(O.uid), JSON.stringify(uidsOf(d)));
+  }
+  // S5: /now empties a household -> household + all four trees deleted
+  {
+    const R = await newUser('e-member');
+    await seedHousehold('hh_del5', { ownerUid: 'ghost-owner-not-a-member', code: 'DEL5AAAA' });
+    await db.doc('households/hh_del5').update({ members: [mem(R, 'member', '2026-03-01T00:00:00.000Z')], memberUids: [R.uid] });
+    await db.doc('household_pantry/hh_del5/items/i1').set({ name: 'x' });
+    await db.doc('household_recipes/hh_del5/recipes/r1').set({ title: 'x' });
+    await db.doc('household_meal_plan/hh_del5/days/2026-09-20').set({ dinner: null });
+    await db.doc('household_activity/hh_del5/events/e1').set({ type: 'x', uid: R.uid });
+    await api('POST', '/api/delete-account/now', R, {});
+    ok('household left with no members is deleted', (await hhDoc('hh_del5')) === null);
+    const counts = await Promise.all(['household_pantry/hh_del5/items', 'household_recipes/hh_del5/recipes', 'household_meal_plan/hh_del5/days', 'household_activity/hh_del5/events'].map((c) => db.collection(c).get()));
+    eq('...and its four household_* trees are gone', counts.map((c) => c.size), [0, 0, 0, 0]);
+  }
+  // S6: /now for an owner with co-admins -> handoff, consistent arrays
+  {
+    const O = await newUser('now-owner'), X = await newUser('now-late'), Y = await newUser('now-early');
+    await seedHousehold('hh_del6', { ownerUid: O.uid, extraMembers: [mem(X, 'co-admin', '2026-05-01T00:00:00.000Z'), mem(Y, 'co-admin', '2026-02-01T00:00:00.000Z')], code: 'DEL6AAAA' });
+    const r = await api('POST', '/api/delete-account/now', O, {});
+    eq('/now for an owner -> 200', r.status, 200);
+    const d = await hhDoc('hh_del6');
+    ok('handoff to earliest co-admin, arrays consistent, old owner gone', d.createdBy === Y.uid && consistent(d) && !uidsOf(d).includes(O.uid), JSON.stringify(uidsOf(d)));
+    eq('deleted user\'s token no longer works (Auth user deleted)', (await api('POST', '/api/households', O, { name: 'x' })).status, 401);
+  }
+}
+
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

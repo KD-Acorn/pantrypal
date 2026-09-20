@@ -9,7 +9,7 @@ import { validateConfirmPayload, buildConfirmationUpdate, BARCODE_RE } from '../
 import {
   HttpError, HOUSEHOLD_CODE_ALPHABET, HOUSEHOLD_ID_RE, randomCode, generateCode, generateHouseholdId, normalizeJoinCode, writeMembers,
   getMemberRole, requireRole, sortCoAdminsByJoinedAt, parseHouseholdName, parseHouseholdId, parseTargetUid, parseAssignableRole,
-  parseHouseholdPatch, serializeHousehold,
+  parseHouseholdPatch, serializeHousehold, planAccountDeletion,
 } from '../utils/households.js';
 import { validateSupportMessages, sanitizeSupportContext, SUPPORT_SESSION_ID_RE } from '../utils/supportContext.js';
 
@@ -156,6 +156,28 @@ check('parseHouseholdPatch rejects unknown/non-boolean settings, empty, non-obje
 ].map((b) => throwsStatus(() => parseHouseholdPatch(b))), [400, 400, 400, 400, 400, 400, 400]);
 check('parseHouseholdPatch: __proto__ key cannot smuggle fields', throwsStatus(() => parseHouseholdPatch(JSON.parse('{"__proto__":{"members":[]},"name":"x"}'))), 400);
 check('serializeHousehold keeps only client-visible fields', Object.keys(serializeHousehold('hh_1', { name: 'n', code: 'C', createdBy: 'u', createdAt: { toDate: () => new Date(0) }, members: [{ uid: 'u', role: 'owner', joinedAt: 'x', extra: 1 }], memberUids: ['u'], settings: {}, disbanded: false, secret: 1 })), ['id', 'name', 'code', 'createdBy', 'createdAt', 'members', 'memberUids', 'settings']);
+
+section('Part C (6.3): planAccountDeletion');
+{
+  const mk = (uid, role, joinedAt) => ({ uid, displayName: uid, email: '', role, joinedAt });
+  const hh = {
+    createdBy: 'own',
+    members: [mk('own', 'owner', '2026-01-01T00:00:00.000Z'), mk('late', 'co-admin', '2026-05-01T00:00:00.000Z'), mk('early', 'co-admin', '2026-02-01T00:00:00.000Z'), mk('mem', 'member', '2026-03-01T00:00:00.000Z')],
+    memberUids: ['own', 'late', 'early', 'mem'],
+  };
+  const h = planAccountDeletion(hh, 'own', 'NOW');
+  check('owner + co-admins -> handoff to the EARLIEST joinedAt (not array order)', [h.action, h.update.createdBy], ['handoff', 'early']);
+  check('handoff: new owner has role owner, deleted owner gone from members AND memberUids together', [h.update.members.find((m) => m.uid === 'early').role, h.update.members.map((m) => m.uid), h.update.memberUids], ['owner', ['late', 'early', 'mem'], ['late', 'early', 'mem']]);
+  const d = planAccountDeletion({ createdBy: 'own', members: [mk('own', 'owner', 'x'), mk('mem', 'member', 'y')], memberUids: ['own', 'mem'] }, 'own', 'NOW');
+  check('owner, no co-admin -> soft disband (members untouched)', [d.action, d.update.disbanded, d.update.disbandedReason, d.update.disbandedAt, 'members' in d.update], ['disband', true, 'owner_deleted_account', 'NOW', false]);
+  check('already-disbanded owned household -> none', planAccountDeletion({ createdBy: 'own', disbanded: true, members: [mk('own', 'owner', 'x')], memberUids: ['own'] }, 'own', 'NOW').action, 'none');
+  const r = planAccountDeletion(hh, 'mem', 'NOW');
+  check('plain member -> remove from members AND memberUids together', [r.action, r.update.members.map((m) => m.uid), r.update.memberUids, r.empty], ['remove', ['own', 'late', 'early'], ['own', 'late', 'early'], false]);
+  const r2 = planAccountDeletion({ createdBy: 'ghost', members: [mk('solo', 'member', 'x')], memberUids: ['solo'] }, 'solo', 'NOW');
+  check('last non-owner member leaving -> remove with empty:true', [r2.action, r2.empty, r2.update.memberUids], ['remove', true, []]);
+  check('user who is not in the household -> none', planAccountDeletion(hh, 'stranger', 'NOW').action, 'none');
+  check('stale uid only in memberUids (not in members) is still cleaned', (() => { const p = planAccountDeletion({ createdBy: 'o', members: [mk('o', 'owner', 'x')], memberUids: ['o', 'stale'] }, 'stale', 'NOW'); return [p.action, p.update.memberUids]; })(), ['remove', ['o']]);
+}
 
 console.log(`\n${failures === 0 ? 'ALL UNIT CHECKS PASSED' : `${failures} UNIT CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);
