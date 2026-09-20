@@ -6,6 +6,11 @@
 import { isAllowedPushEndpoint, validatePushSubscription } from '../utils/pushEndpoint.js';
 import { parseMeasureAmount, splitMeasure } from '../utils/measure.js';
 import { validateConfirmPayload, buildConfirmationUpdate, BARCODE_RE } from '../utils/barcode.js';
+import {
+  HttpError, HOUSEHOLD_CODE_ALPHABET, HOUSEHOLD_ID_RE, randomCode, generateCode, generateHouseholdId, normalizeJoinCode, writeMembers,
+  getMemberRole, requireRole, sortCoAdminsByJoinedAt, parseHouseholdName, parseHouseholdId, parseTargetUid, parseAssignableRole,
+  parseHouseholdPatch, serializeHousehold,
+} from '../utils/households.js';
 import { validateSupportMessages, sanitizeSupportContext, SUPPORT_SESSION_ID_RE } from '../utils/supportContext.js';
 
 let failures = 0;
@@ -100,6 +105,57 @@ const ctx = sanitizeSupportContext({
 });
 check('context: only whitelisted keys, no uid', Object.keys(ctx), ['currentTab', 'pantryItemCount', 'displayName', 'domain', 'appVersion', 'recentLogs', 'recentErrors', 'deviceInfo']);
 check('context: arrays capped at 20, strings at 500, unknown entry keys dropped', [ctx.recentLogs.length, ctx.recentErrors[0].stack.length, 'junk' in ctx.recentErrors[0], ctx.recentErrors.length], [20, 500, false, 2]);
+
+section('Part A (6.3): household helpers');
+const throwsStatus = (fn) => { try { fn(); return 'no throw'; } catch (e) { return e instanceof HttpError ? e.status : `other:${e.message}`; } };
+check('alphabet has no 0 O 1 I L and 31 chars', [/[0O1IL]/.test(HOUSEHOLD_CODE_ALPHABET), HOUSEHOLD_CODE_ALPHABET.length], [false, 31]);
+check('randomCode: 8 chars, all from alphabet (2000 samples)', Array.from({ length: 2000 }, () => randomCode()).every((c) => c.length === 8 && [...c].every((ch) => HOUSEHOLD_CODE_ALPHABET.includes(ch))), true);
+check('generateHouseholdId matches ^hh_[A-Za-z0-9_]+$', HOUSEHOLD_ID_RE.test(generateHouseholdId()), true);
+{ // generateCode retries until no household has the code
+  let calls = 0;
+  const fakeDb = { collection: () => ({ where: () => ({ limit: () => ({ get: async () => ({ empty: ++calls > 3 }) }) }) }) };
+  check('generateCode retries on collision then succeeds', [(await generateCode(fakeDb)).length, calls], [8, 4]);
+  const alwaysTaken = { collection: () => ({ where: () => ({ limit: () => ({ get: async () => ({ empty: false }) }) }) }) };
+  check('generateCode gives up after 10 collisions', await generateCode(alwaysTaken).then(() => 'resolved', (e) => e.message), 'could not generate a unique household code');
+}
+check('normalizeJoinCode: case-insensitive 6 and 8 char', [normalizeJoinCode(' abc234 '), normalizeJoinCode('abcd2345')], ['ABC234', 'ABCD2345']);
+check('normalizeJoinCode: wrong length / symbols -> 404 Invalid code', ['ABC', 'ABCDEFG', 'AB-CD2345', '', 'ABC234\n9'].map((c) => throwsStatus(() => normalizeJoinCode(c))), [404, 404, 404, 404, 404]);
+check('normalizeJoinCode: non-string -> 400', [undefined, 5, {}].map((c) => throwsStatus(() => normalizeJoinCode(c))), [400, 400, 400]);
+{ // writeMembers derives memberUids, dedupes, rejects bad members
+  const w = writeMembers([{ uid: 'a', role: 'owner' }, { uid: 'b', role: 'member' }, { uid: 'a', role: 'member' }]);
+  check('writeMembers derives memberUids and dedupes by uid', [w.memberUids, w.members.length, w.members[0].role], [['a', 'b'], 2, 'owner']);
+  check('writeMembers([]) is valid (empty)', writeMembers([]), { members: [], memberUids: [] });
+  check('writeMembers rejects a member without uid', [() => writeMembers([{ role: 'x' }]), () => writeMembers('no')].map((f) => { try { f(); return 'ok'; } catch { return 'threw'; } }), ['threw', 'threw']);
+}
+{
+  const hh = { members: [{ uid: 'o', role: 'owner' }, { uid: 'c', role: 'co-admin' }, { uid: 'm', role: 'member' }] };
+  check('getMemberRole', ['o', 'c', 'm', 'x'].map((u) => getMemberRole(hh, u)), ['owner', 'co-admin', 'member', null]);
+  check('requireRole: non-member -> 404 (never 403)', throwsStatus(() => requireRole(hh, 'x', ['owner'])), 404);
+  check('requireRole: wrong role -> 403', throwsStatus(() => requireRole(hh, 'm', ['owner', 'co-admin'])), 403);
+  check('requireRole: allowed role returns it', requireRole(hh, 'c', ['owner', 'co-admin']), 'co-admin');
+}
+check('sortCoAdminsByJoinedAt uses parsed ISO dates, not array order', sortCoAdminsByJoinedAt([
+  { uid: 'o', role: 'owner', joinedAt: '2026-01-01T00:00:00.000Z' },
+  { uid: 'late', role: 'co-admin', joinedAt: '2026-05-01T00:00:00.000Z' },
+  { uid: 'early', role: 'co-admin', joinedAt: '2026-02-01T00:00:00.000Z' },
+  { uid: 'junk', role: 'co-admin', joinedAt: 'not a date' },
+  { uid: 'm', role: 'member', joinedAt: '2026-01-02T00:00:00.000Z' },
+]).map((m) => m.uid), ['early', 'late', 'junk']);
+check('parseHouseholdName trims / strips control chars', parseHouseholdName('  Smith ' + String.fromCharCode(7) + 'Family  '), 'Smith Family');
+check('parseHouseholdName rejects empty / whitespace / 61 chars / non-string', ['', '   ', 'x'.repeat(61), 5, null].map((v) => throwsStatus(() => parseHouseholdName(v))), [400, 400, 400, 400, 400]);
+check('parseHouseholdName accepts exactly 60', parseHouseholdName('x'.repeat(60)).length, 60);
+check('parseHouseholdId', [throwsStatus(() => parseHouseholdId('hh_1758_abc')), throwsStatus(() => parseHouseholdId('../x')), throwsStatus(() => parseHouseholdId('hh_')), throwsStatus(() => parseHouseholdId('hh_a b')), throwsStatus(() => parseHouseholdId(7))], ['no throw', 400, 400, 400, 400]);
+check('parseTargetUid', [throwsStatus(() => parseTargetUid('abc123')), throwsStatus(() => parseTargetUid('')), throwsStatus(() => parseTargetUid('a/b')), throwsStatus(() => parseTargetUid('a b')), throwsStatus(() => parseTargetUid('x'.repeat(129)))], ['no throw', 400, 400, 400, 400]);
+check('parseAssignableRole: co-admin/member ok; owner/admin/undefined -> 400', [parseAssignableRole('co-admin'), parseAssignableRole('member'), throwsStatus(() => parseAssignableRole('owner')), throwsStatus(() => parseAssignableRole('admin')), throwsStatus(() => parseAssignableRole(undefined))], ['co-admin', 'member', 400, 400, 400]);
+check('parseHouseholdPatch: name + settings ok', parseHouseholdPatch({ name: ' New ', settings: { sharesPantry: false } }), { name: 'New', settings: { sharesPantry: false } });
+for (const k of ['members', 'memberUids', 'code', 'createdBy', 'disbanded', 'createdAt', 'id']) {
+  check(`parseHouseholdPatch rejects ${k}`, throwsStatus(() => parseHouseholdPatch({ name: 'x', [k]: k === 'members' ? [] : 'x' })), 400);
+}
+check('parseHouseholdPatch rejects unknown/non-boolean settings, empty, non-object', [
+  { settings: { evil: true } }, { settings: { sharesPantry: 'yes' } }, { settings: {} }, {}, null, [], { settings: [] },
+].map((b) => throwsStatus(() => parseHouseholdPatch(b))), [400, 400, 400, 400, 400, 400, 400]);
+check('parseHouseholdPatch: __proto__ key cannot smuggle fields', throwsStatus(() => parseHouseholdPatch(JSON.parse('{"__proto__":{"members":[]},"name":"x"}'))), 400);
+check('serializeHousehold keeps only client-visible fields', Object.keys(serializeHousehold('hh_1', { name: 'n', code: 'C', createdBy: 'u', createdAt: { toDate: () => new Date(0) }, members: [{ uid: 'u', role: 'owner', joinedAt: 'x', extra: 1 }], memberUids: ['u'], settings: {}, disbanded: false, secret: 1 })), ['id', 'name', 'code', 'createdBy', 'createdAt', 'members', 'memberUids', 'settings']);
 
 console.log(`\n${failures === 0 ? 'ALL UNIT CHECKS PASSED' : `${failures} UNIT CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

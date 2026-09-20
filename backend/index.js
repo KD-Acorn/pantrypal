@@ -61,12 +61,15 @@ const LIMITS = {
   supportChat: { perMin: 10 },
   barcodeConfirm: { perMin: 30 },
   barcodeLookup: { perMin: 30 },
+  householdJoin: { perHour: 10 },      // POST /api/households/join, per uid (code-guessing brake)
+  householdWrites: { perMin: 30 },     // every other /api/households write, one shared bucket per uid
   bodyDefault: '1mb',                  // every route except the scan routes
   bodyScan: '10mb',                    // base64 images on the three scan routes only
 };
 
 const MINUTE_MS = 60_000;
-const DAY_MS = 24 * 60 * MINUTE_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 const TOO_MANY_REQUESTS = { error: 'Too many requests. Please wait a moment and try again.' };
 
 const uidLimiter = (windowMs, limit) => rateLimit({
@@ -104,6 +107,8 @@ const substitutionsLimiter = uidLimiter(MINUTE_MS, LIMITS.substitutions.perMin);
 const supportChatLimiter = uidLimiter(MINUTE_MS, LIMITS.supportChat.perMin);
 const barcodeConfirmLimiter = uidLimiter(MINUTE_MS, LIMITS.barcodeConfirm.perMin);
 const barcodeLookupLimiter = uidLimiter(MINUTE_MS, LIMITS.barcodeLookup.perMin);
+const householdJoinLimiter = uidLimiter(HOUR_MS, LIMITS.householdJoin.perHour);
+const householdWriteLimiter = uidLimiter(MINUTE_MS, LIMITS.householdWrites.perMin);
 
 // Scan routes: auth (per route) -> per-uid limits -> the big body parser, so an
 // unauthenticated or rate-limited caller never makes us buffer a 10mb body.
