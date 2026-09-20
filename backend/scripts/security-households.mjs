@@ -10,6 +10,8 @@
 // or by hand inside `firebase emulators:exec --only firestore,auth`:
 //   PORT=3103 node index.js &  BASE_URL=http://localhost:3103 node scripts/security-households.mjs
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
@@ -415,6 +417,43 @@ section('10. account deletion: /api/delete-account (grace) and /api/delete-accou
     ok('handoff to earliest co-admin, arrays consistent, old owner gone', d.createdBy === Y.uid && consistent(d) && !uidsOf(d).includes(O.uid), JSON.stringify(uidsOf(d)));
     eq('deleted user\'s token no longer works (Auth user deleted)', (await api('POST', '/api/households', O, { name: 'x' })).status, 401);
   }
+}
+
+// ── 11. backfill script (Part E) ─────────────────────────────────────────────
+section('11. backfillHouseholds.js: dry run changes nothing, --apply fixes, second run is a no-op');
+{
+  const script = fileURLToPath(new URL('./backfillHouseholds.js', import.meta.url));
+  const run = (...a) => {
+    const r = spawnSync('node', [script, ...a], { env: process.env, encoding: 'utf8' }); // inherits the emulator env
+    const line = (r.stdout || '').split('\n').find((l) => l.startsWith('SUMMARY '));
+    return { status: r.status, summary: line ? JSON.parse(line.slice(8)) : null, out: r.stdout };
+  };
+  const mk = (uid, role) => ({ uid, displayName: uid, email: '', role, joinedAt: '2026-01-01T00:00:00.000Z' });
+  await db.doc('households/hh_bf1').set({ id: 'hh_bf1', name: 'stale', code: 'BFSTALE2', createdBy: 'o1', members: [mk('o1', 'owner'), mk('x1', 'member')], memberUids: ['o1'] });
+  await db.doc('households/hh_bf2').set({ id: 'hh_bf2', name: 'missing', code: 'BFMISS22', createdBy: 'o2', members: [mk('o2', 'owner')] });
+  await db.doc('households/hh_bf3').set({ id: 'hh_bf3', name: 'nocode', createdBy: 'o3', members: [mk('o3', 'owner')], memberUids: ['o3'] });
+  await db.doc('household_activity/hh_bf_orphan/events/e1').set({ type: 'x', uid: 'nobody' });
+
+  const dry = run();
+  eq('dry run exits 0 and prints a summary', dry.status, 0);
+  ok('dry run detects stale + missing memberUids, missing code, an orphan doc', dry.summary.memberUidsStale >= 1 && dry.summary.memberUidsMissing >= 1 && dry.summary.codeMissing >= 1 && dry.summary.orphanDocs >= 1, JSON.stringify(dry.summary));
+  ok('dry run wrote nothing', JSON.stringify((await hhDoc('hh_bf1')).memberUids) === '["o1"]' && (await hhDoc('hh_bf2')).memberUids === undefined && (await hhDoc('hh_bf3')).code === undefined && (await db.doc('household_activity/hh_bf_orphan/events/e1').get()).exists);
+  ok('output is counts only (no uids/codes/names)', !/o1|x1|BFSTALE2|BFMISS22|stale|nocode/.test(dry.out.replace(/memberUids stale\/mismatched|memberUids missing|code missing/g, '')), dry.out);
+
+  const apply = run('--apply');
+  eq('--apply exits 0', apply.status, 0);
+  eq('memberUids recomputed from members (stale + missing)', [uidsOf(await hhDoc('hh_bf1')), uidsOf(await hhDoc('hh_bf2'))], [['o1', 'x1'], ['o2']]);
+  ok('missing code generated (8 chars, unambiguous alphabet)', CODE_ALPHABET.test((await hhDoc('hh_bf3')).code || ''));
+  ok('the orphaned subcollection doc was deleted', !(await db.doc('household_activity/hh_bf_orphan/events/e1').get()).exists);
+  eq('existing codes were not touched', [(await hhDoc('hh_bf1')).code, (await hhDoc('hh_bf2')).code], ['BFSTALE2', 'BFMISS22']);
+
+  const again = run('--apply');
+  ok('second --apply is a no-op (idempotent)', again.summary.memberUidsStale === 0 && again.summary.memberUidsMissing === 0 && again.summary.codeMissing === 0 && again.summary.orphanDocs === 0 && again.summary.fixedMemberUids === 0 && again.summary.generatedCodes === 0, JSON.stringify(again.summary));
+
+  // safety cap: more orphans than the cap are reported, not deleted
+  for (let i = 0; i < 3; i++) await db.doc(`household_pantry/hh_bf_orph${i}/items/i`).set({ n: i });
+  const capped = run('--apply', '--max-orphan-deletes=2');
+  ok('orphans over --max-orphan-deletes are skipped, not deleted', capped.summary.orphansSkippedOverCap === true && (await db.doc('household_pantry/hh_bf_orph0/items/i').get()).exists, JSON.stringify(capped.summary));
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);
