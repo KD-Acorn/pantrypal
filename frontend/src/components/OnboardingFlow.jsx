@@ -85,7 +85,7 @@ export default function OnboardingFlow({ onComplete, currentUser, household, set
         await setDoc(doc(db, 'users', uid), { displayName: formData.displayName.trim() }, { merge: true });
         if (settings) settings.updateDisplayName(formData.displayName.trim());
       }
-      if (formData.householdCode.trim().length === 6 && household?.joinByCode) {
+      if ([6, 8].includes(formData.householdCode.trim().length) && household?.joinByCode) {
         try {
           await household.joinByCode(formData.householdCode.trim().toUpperCase());
           setHhJoinStatus('joined');
@@ -229,13 +229,13 @@ export default function OnboardingFlow({ onComplete, currentUser, household, set
                 <input
                   value={formData.householdCode}
                   onChange={e => {
-                    updateField('householdCode', e.target.value.toUpperCase().slice(0, 6));
+                    updateField('householdCode', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8));
                     setHhJoinStatus(null);
                   }}
-                  placeholder="ABC123"
-                  maxLength={6}
+                  placeholder="ABCD2345"
+                  maxLength={8}
                   style={{
-                    width: 120, height: 44, border: '1px solid #e5e7eb', borderRadius: 10,
+                    width: 150, height: 44, border: '1px solid #e5e7eb', borderRadius: 10,
                     padding: '0 14px', fontSize: 17, fontFamily: 'inherit', outline: 'none',
                     letterSpacing: 3, textAlign: 'center', textTransform: 'uppercase',
                   }}

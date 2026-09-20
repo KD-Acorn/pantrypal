@@ -1,10 +1,17 @@
 [
   {
+    "version": "3.1.0",
+    "date": "2026-09-20",
+    "type": "minor",
+    "title": "Safer households",
+    "summary": "Household changes now run through our servers. Join codes are 8 characters (older 6-character codes still work), owners and co-admins can generate a new code, and co-admins can remove members but not other admins. You may need to reopen the app to update."
+  },
+  {
     "version": "3.0.1",
     "date": "2026-07-16",
     "type": "patch",
     "title": "Photo scan fixes",
-    "summary": "Photo scans are more reliable now — faster uploads and clearer error messages when something goes wrong."
+    "summary": "Photo scans are more reliable now \u2014 faster uploads and clearer error messages when something goes wrong."
   },
   {
     "version": "3.0.0",
@@ -25,6 +32,6 @@
     "date": "2026-06-23",
     "type": "major",
     "title": "My Pantry Club launches",
-    "summary": "Initial release — pantry scanning and AI recipe discovery."
+    "summary": "Initial release \u2014 pantry scanning and AI recipe discovery."
   }
 ]

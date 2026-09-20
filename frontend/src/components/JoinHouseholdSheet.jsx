@@ -1,5 +1,13 @@
 import { useState } from 'react';
 
+// Email invites are switched off: household_invites is server-only and nothing consumes it (post-launch item #33).
+const EMAIL_INVITES_ENABLED = false;
+
+// Codes are 8 characters now; existing 6-character codes keep working. Input is uppercased and limited to
+// letters/digits (not to the new alphabet, because older 6-character codes can contain an "L").
+const cleanCode = (v) => v.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+const isValidCode = (c) => c.length === 6 || c.length === 8;
+
 export default function JoinHouseholdSheet({ household, displayName, onClose, toast }) {
   const [tab, setTab] = useState('code');
   const [code, setCode] = useState('');
@@ -8,7 +16,7 @@ export default function JoinHouseholdSheet({ household, displayName, onClose, to
   const [error, setError] = useState('');
 
   async function handleJoin() {
-    if (code.trim().length < 4) return;
+    if (!isValidCode(code.trim())) return;
     setJoining(true);
     setError('');
     try {
@@ -54,15 +62,17 @@ export default function JoinHouseholdSheet({ household, displayName, onClose, to
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#9ca3af', cursor: 'pointer' }}>✕</button>
         </div>
 
-        <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: '#f3f4f6', borderRadius: 10, padding: 3 }}>
-          <button onClick={() => { setTab('code'); setError(''); }} style={tabStyle(tab === 'code')}>🔢 Enter Code</button>
-          <button onClick={() => { setTab('email'); setError(''); }} style={tabStyle(tab === 'email')}>📧 Email Invite</button>
-        </div>
+        {EMAIL_INVITES_ENABLED && (
+          <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: '#f3f4f6', borderRadius: 10, padding: 3 }}>
+            <button onClick={() => { setTab('code'); setError(''); }} style={tabStyle(tab === 'code')}>🔢 Enter Code</button>
+            <button onClick={() => { setTab('email'); setError(''); }} style={tabStyle(tab === 'email')}>📧 Email Invite</button>
+          </div>
+        )}
 
         {tab === 'code' && (
           <>
-            <input value={code} onChange={e => setCode(e.target.value.toUpperCase().slice(0, 6))}
-              placeholder="ABC123"
+            <input value={code} onChange={e => setCode(cleanCode(e.target.value))}
+              placeholder="ABCD2345"
               style={{
                 width: '100%', height: 52, border: '1px solid #e5e7eb', borderRadius: 10,
                 padding: '0 14px', fontSize: 24, fontFamily: 'monospace', outline: 'none',
@@ -72,10 +82,10 @@ export default function JoinHouseholdSheet({ household, displayName, onClose, to
             {error && (
               <div style={{ fontSize: 12, color: '#ef4444', marginBottom: 10 }}>{error}</div>
             )}
-            <button onClick={handleJoin} disabled={code.trim().length < 4 || joining} style={{
+            <button onClick={handleJoin} disabled={!isValidCode(code.trim()) || joining} style={{
               width: '100%', height: 44, borderRadius: 10, border: 'none',
-              background: code.trim().length >= 4 && !joining ? '#10b981' : '#d1d5db', color: '#fff',
-              fontSize: 15, fontWeight: 600, cursor: code.trim().length >= 4 && !joining ? 'pointer' : 'default',
+              background: isValidCode(code.trim()) && !joining ? '#10b981' : '#d1d5db', color: '#fff',
+              fontSize: 15, fontWeight: 600, cursor: isValidCode(code.trim()) && !joining ? 'pointer' : 'default',
               fontFamily: 'inherit',
             }}>{joining ? 'Joining...' : 'Join Household'}</button>
           </>

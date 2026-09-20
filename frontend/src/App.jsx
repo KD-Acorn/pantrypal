@@ -144,8 +144,9 @@ function AppContent() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    if (code) sessionStorage.setItem('pantrypal_join_code', code);
+    // Household join codes are 6 (older) or 8 (current) letters/digits.
+    const code = (params.get('code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    if (code.length === 6 || code.length === 8) sessionStorage.setItem('pantrypal_join_code', code);
   }, []);
 
   useEffect(() => {

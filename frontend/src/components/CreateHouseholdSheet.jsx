@@ -5,15 +5,18 @@ export default function CreateHouseholdSheet({ household, displayName, onClose, 
   const [creating, setCreating] = useState(false);
   const [createdCode, setCreatedCode] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState('');
 
   async function handleCreate() {
     if (!name.trim()) return;
     setCreating(true);
+    setError('');
     try {
       const result = await household.createHousehold(name.trim(), displayName);
       console.log('[Household] Created:', result);
       setCreatedCode(result?.code || '------');
     } catch (err) {
+      setError(err.message || 'Failed to create household');
       toast?.show('Failed to create household', 'error');
     } finally {
       setCreating(false);
@@ -64,13 +67,14 @@ export default function CreateHouseholdSheet({ household, displayName, onClose, 
         ) : (
           <>
             <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 16 }}>Create a Household</div>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="My Family"
+            <input value={name} onChange={e => setName(e.target.value.slice(0, 60))} placeholder="My Family"
               onKeyDown={e => e.key === 'Enter' && handleCreate()}
               style={{
                 width: '100%', height: 44, border: '1px solid #e5e7eb', borderRadius: 10,
                 padding: '0 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none',
                 marginBottom: 14, boxSizing: 'border-box',
               }} />
+            {error && <div style={{ fontSize: 12, color: '#ef4444', marginBottom: 10 }}>{error}</div>}
             <button onClick={handleCreate} disabled={!name.trim() || creating} style={{
               width: '100%', height: 44, borderRadius: 10, border: 'none',
               background: name.trim() && !creating ? '#10b981' : '#d1d5db', color: '#fff',
