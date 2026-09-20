@@ -14,6 +14,7 @@ import cron from 'node-cron';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import { contentSafetyCheck, inferCategory, hasDrinkSignal, SAVORY_PATTERNS } from './utils/catalogClassifier.js';
+import { registerHouseholdRoutes } from './routes/households.js';
 import { createScanLogger } from './utils/scanLog.js';
 import { splitMeasure } from './utils/measure.js';
 import { validatePushSubscription } from './utils/pushEndpoint.js';
@@ -132,7 +133,7 @@ app.use(cors({
     'https://www.mypantryclub.app',
     'https://admin.mypantryclub.com',
   ],
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use('/api', ipLimiter);
@@ -1436,6 +1437,12 @@ Return ONLY a valid JSON array of 3 substitution objects. No markdown, no preamb
     console.error('Substitution error:', err);
     res.status(500).json({ error: 'Substitution suggestion failed' });
   }
+});
+
+// ── /api/households/* — household create/join/leave/roles/settings/rotate/disband ──
+registerHouseholdRoutes(app, {
+  adminDb, adminAuth, requireAuth,
+  joinLimiter: householdJoinLimiter, writeLimiter: householdWriteLimiter,
 });
 
 // ── POST /api/delete-account — Account deletion with 7-day grace period ──────

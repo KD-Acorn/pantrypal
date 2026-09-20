@@ -183,3 +183,14 @@ export function serializeHousehold(id, data) {
     settings: data.settings || { sharesPantry: true, sharesRecipes: true, sharesMealPlan: true },
   };
 }
+
+// ── cleanup ──────────────────────────────────────────────────────────────────
+
+export const HOUSEHOLD_SUBCOLLECTION_ROOTS = ['household_pantry', 'household_recipes', 'household_meal_plan', 'household_activity'];
+
+// Recursively deletes the four household_* trees for one household id (Admin SDK recursiveDelete).
+// Does NOT delete the households/{hid} doc itself; callers do that (usually first, in a transaction,
+// so access ends immediately) and then call this.
+export async function deleteHouseholdSubcollections(db, hid) {
+  await Promise.all(HOUSEHOLD_SUBCOLLECTION_ROOTS.map((root) => db.recursiveDelete(db.collection(root).doc(hid))));
+}
