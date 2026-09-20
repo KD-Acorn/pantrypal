@@ -39,8 +39,12 @@ service cloud.firestore {
     }
     match /public_recipes/{recipeId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null &&
+      allow create: if request.auth != null &&
+        request.resource.data.authorUid == request.auth.uid;
+      allow update: if request.auth != null &&
+        request.auth.uid == resource.data.authorUid &&
+        request.resource.data.authorUid == resource.data.authorUid;
+      allow delete: if request.auth != null &&
         request.auth.uid == resource.data.authorUid;
     }
     match /grocery/{uid}/items/{itemId} {
@@ -49,14 +53,25 @@ service cloud.firestore {
     match /meal_plan/{uid}/days/{date} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+    // Events are create-only (random ids, never updated). The client sends its own uid,
+    // or 'anonymous' when the call site has none, so a forged uid is the only thing to block.
     match /analytics_events/{docId} {
-      allow write: if request.auth != null;
+      allow create: if request.auth != null &&
+        request.resource.data.get('uid', 'anonymous') in [request.auth.uid, 'anonymous'];
     }
+    // One shared doc per day that every client increments, so ownership can't be
+    // expressed here. Anyone signed in can still write it (remaining Low), but no one
+    // can delete it or bloat it with arbitrary fields.
     match /analytics_daily/{docId} {
-      allow write: if request.auth != null;
+      allow create, update: if request.auth != null &&
+        request.resource.data.keys().size() <= 40;
+      allow delete: if false;
     }
+    // Create-only: the report must be filed under the caller's own uid. Status changes
+    // and deletes are done by the admin panel via the isAdmin() catch-all above.
     match /bug_reports/{reportId} {
-      allow write: if request.auth != null;
+      allow create: if request.auth != null &&
+        request.resource.data.uid == request.auth.uid;
     }
     match /households/{householdId} {
       allow read: if request.auth != null;
@@ -83,19 +98,26 @@ service cloud.firestore {
         request.auth.uid == docId;
     }
     match /verified_products/{barcode} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if false; // only the Admin SDK (backend) and the admin panel (isAdmin() above) write this
     }
     match /user_recipes/{recipeId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null &&
+      allow create: if request.auth != null &&
+        request.resource.data.authorUid == request.auth.uid;
+      allow update: if request.auth != null &&
+        request.auth.uid == resource.data.authorUid &&
+        request.resource.data.authorUid == resource.data.authorUid;
+      allow delete: if request.auth != null &&
         request.auth.uid == resource.data.authorUid;
     }
     match /recipe_comments/{recipeId}/comments/{commentId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null;
+      allow create: if request.auth != null &&
+        request.resource.data.authorUid == request.auth.uid;
       allow update: if request.auth != null &&
-        request.auth.uid == resource.data.authorUid;
+        request.auth.uid == resource.data.authorUid &&
+        request.resource.data.authorUid == resource.data.authorUid;
       allow delete: if request.auth != null &&
         request.auth.uid == resource.data.authorUid;
     }
